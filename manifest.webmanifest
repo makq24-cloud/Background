@@ -1,0 +1,15 @@
+{
+  "name": "BG Remove — DTG",
+  "short_name": "BG Remove",
+  "description": "DTG background-removal companion to TeeSort. Color-to-alpha, platen placement, transparent PNG export.",
+  "start_url": "/Background/",
+  "scope": "/Background/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#111827",
+  "background_color": "#111827",
+  "icons": [
+    { "src": "/Background/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/Background/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
