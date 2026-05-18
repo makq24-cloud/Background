@@ -1,6 +1,6 @@
 {
-  "name": "BG Remove — DTG",
-  "short_name": "BG Remove",
+  "name": "Background Remover",
+  "short_name": "Background Remover",
   "description": "DTG background removal. Color-to-alpha, platen placement, transparent PNG export.",
   "start_url": "/Background/",
   "scope": "/Background/",
