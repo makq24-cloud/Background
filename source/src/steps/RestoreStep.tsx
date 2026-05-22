@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Maximize2, Sparkles } from 'lucide-react';
 import { AppState } from '../App';
 import { cloneImageData, get2dContext } from '../utils/imageUtils';
+import { analyzeSpecks, speckIds, removeSpecks, SpeckAnalysis } from '../utils/dotCleanup';
 
 type Tool = 'restore' | 'erase' | 'none';
 type BgMode = 'checker' | 'white' | 'black' | 'custom';
@@ -44,6 +45,12 @@ export default function RestoreStep({ state, updateState, goToStep }: Props) {
   const [containerW, setContainerW] = useState(700);
   const [containerH, setContainerH] = useState(500);
   const [cursorPos, setCursorPos] = useState<{ cx: number; cy: number } | null>(null);
+
+  // Dot Cleanup — auto-removal of tiny floating specks.
+  const [dotPanel, setDotPanel] = useState(false);
+  const [dotAnalyzing, setDotAnalyzing] = useState(false);
+  const [speckAnalysis, setSpeckAnalysis] = useState<SpeckAnalysis | null>(null);
+  const [dotThreshold, setDotThreshold] = useState(150);
 
   const imgW = workingData?.width ?? 0;
   const imgH = workingData?.height ?? 0;
@@ -361,6 +368,40 @@ export default function RestoreStep({ state, updateState, goToStep }: Props) {
 
   const fitToScreen = () => setZoom(1);
 
+  // --- Dot Cleanup ----------------------------------------------------------
+  const openDotCleanup = () => {
+    const data = workingRef.current ?? workingData;
+    if (!data) return;
+    setCurrentTool('none');
+    setDotPanel(true);
+    setDotAnalyzing(true);
+    setSpeckAnalysis(null);
+    // Let the spinner paint before the (blocking) connected-component pass.
+    setTimeout(() => {
+      const a = analyzeSpecks(data);
+      setSpeckAnalysis(a);
+      setDotAnalyzing(false);
+    }, 30);
+  };
+
+  const closeDotCleanup = () => {
+    setDotPanel(false);
+    setSpeckAnalysis(null);
+    setDotAnalyzing(false);
+  };
+
+  const applyDotCleanup = () => {
+    const data = workingRef.current ?? workingData;
+    if (!data || !speckAnalysis) return;
+    const cleaned = removeSpecks(data, speckAnalysis, dotThreshold);
+    setUndoStack(prev => [...prev.slice(-19), cloneImageData(data)]);
+    workingRef.current = cleaned;
+    setWorkingData(cleaned);
+    closeDotCleanup();
+  };
+
+  const speckList = speckAnalysis ? speckIds(speckAnalysis, dotThreshold) : [];
+
   const proceed = () => {
     const data = workingRef.current ?? workingData;
     if (data) {
@@ -373,12 +414,7 @@ export default function RestoreStep({ state, updateState, goToStep }: Props) {
   const cursorRingDiameter = brushSize * 2 * renderScale;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-3xl font-bold mb-1">Touch-Up Brushes</h2>
-        <p className="text-gray-400 text-sm">Restore or erase pixels with an adjustable brush. Switch tools freely. Check your work on different background colors.</p>
-      </div>
-
+    <div className="space-y-3">
       <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-start">
         <div className="flex-1 space-y-3 min-w-0">
           <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2 flex-wrap">
@@ -441,75 +477,147 @@ export default function RestoreStep({ state, updateState, goToStep }: Props) {
                 }}
               />
             )}
+            {/* Dot Cleanup — red rings mark every speck that will be removed. */}
+            {dotPanel && speckAnalysis && speckList.slice(0, 250).map((id) => {
+              const s = speckAnalysis.spots[id];
+              const d = Math.max(14, s.r * 2 * renderScale + 10);
+              return (
+                <div
+                  key={id}
+                  className="pointer-events-none absolute rounded-full"
+                  style={{
+                    left: s.cx * renderScale - d / 2,
+                    top: s.cy * renderScale - d / 2,
+                    width: d,
+                    height: d,
+                    border: '2px solid rgba(248,113,113,0.95)',
+                    boxShadow: '0 0 0 1px rgba(0,0,0,0.6)',
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
 
-        <div className="w-full lg:w-60 lg:shrink-0 space-y-4">
-          <div className="bg-gray-800 p-4 rounded-lg space-y-3">
-            <div>
-              <label className="text-xs text-gray-400 font-medium block mb-2">Active Tool</label>
-              <div className="grid grid-cols-1 gap-1.5">
-                <button
-                  onClick={() => setCurrentTool(t => t === 'restore' ? 'none' : 'restore')}
-                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 ${currentTool === 'restore' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
-                >
-                  <span className="text-base">🖌️</span>
-                  <span>{currentTool === 'restore' ? 'Restore (Active)' : 'Restore Brush'}</span>
-                </button>
-                <button
-                  onClick={() => setCurrentTool(t => t === 'erase' ? 'none' : 'erase')}
-                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 ${currentTool === 'erase' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
-                >
-                  <span className="text-base">🧹</span>
-                  <span>{currentTool === 'erase' ? 'Eraser (Active)' : 'Erase Brush'}</span>
-                </button>
-                {currentTool !== 'none' && (
-                  <button onClick={() => setCurrentTool('none')} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs text-gray-400 transition">
-                    Deactivate Tool
-                  </button>
-                )}
+        <div className="w-full lg:w-60 lg:shrink-0 space-y-3">
+          {dotPanel ? (
+            <div className="bg-gray-800 p-4 rounded-lg space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-blue-400" />
+                <span className="font-semibold">Dot Cleanup</span>
               </div>
-              {currentTool === 'none' && (
-                <p className="text-xs text-gray-500 mt-2">Select a brush above to start painting.</p>
-              )}
+              {dotAnalyzing ? (
+                <p className="text-sm text-gray-400 py-6 text-center">Scanning for specks…</p>
+              ) : speckAnalysis ? (
+                <>
+                  <p className="text-xs text-gray-400 leading-snug">
+                    Red rings mark every floating speck that will be removed. Drag
+                    to set the largest speck size to clear — your main artwork is
+                    always kept.
+                  </p>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-sm font-medium">Speck size</label>
+                      <span className="font-mono text-blue-400 text-sm">&le; {dotThreshold} px</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="1200" step="10" value={dotThreshold}
+                      onChange={e => setDotThreshold(parseInt(e.target.value))}
+                      className="w-full accent-blue-500"
+                    />
+                  </div>
+                  <p className="text-sm">
+                    <span className="font-semibold text-red-300">{speckList.length}</span>
+                    <span className="text-gray-400"> speck{speckList.length === 1 ? '' : 's'} will be removed</span>
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={closeDotCleanup}
+                      className="flex-1 px-3 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-semibold transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={applyDotCleanup}
+                      disabled={speckList.length === 0}
+                      className="flex-1 px-3 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg text-sm font-semibold transition"
+                    >
+                      Remove {speckList.length}
+                    </button>
+                  </div>
+                </>
+              ) : null}
             </div>
+          ) : (
+            <>
+              <div className="bg-gray-800 p-4 rounded-lg space-y-3">
+                <div>
+                  <label className="text-xs text-gray-400 font-medium block mb-2">Active Tool</label>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    <button
+                      onClick={() => setCurrentTool(t => t === 'restore' ? 'none' : 'restore')}
+                      className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 ${currentTool === 'restore' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                    >
+                      <span>{currentTool === 'restore' ? 'Restore (Active)' : 'Restore Brush'}</span>
+                    </button>
+                    <button
+                      onClick={() => setCurrentTool(t => t === 'erase' ? 'none' : 'erase')}
+                      className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2 ${currentTool === 'erase' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                    >
+                      <span>{currentTool === 'erase' ? 'Eraser (Active)' : 'Erase Brush'}</span>
+                    </button>
+                    {currentTool !== 'none' && (
+                      <button onClick={() => setCurrentTool('none')} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs text-gray-400 transition">
+                        Deactivate Tool
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-            <div>
-              <label className="text-sm font-medium block mb-1">
-                Brush Size <span className="font-mono text-blue-400 ml-1">{brushSize}px</span>
-              </label>
-              <input type="range" min="1" max="150" value={brushSize} onChange={e => setBrushSize(parseInt(e.target.value))} className="w-full accent-blue-500" />
-            </div>
+                <div>
+                  <label className="text-sm font-medium block mb-1">
+                    Brush Size <span className="font-mono text-blue-400 ml-1">{brushSize}px</span>
+                  </label>
+                  <input type="range" min="1" max="150" value={brushSize} onChange={e => setBrushSize(parseInt(e.target.value))} className="w-full accent-blue-500" />
+                </div>
 
-            <div>
-              <label className="text-sm font-medium block mb-1">
-                Strength <span className="font-mono text-blue-400 ml-1">{brushStrength}%</span>
-              </label>
-              <input type="range" min="1" max="100" value={brushStrength} onChange={e => setBrushStrength(parseInt(e.target.value))} className="w-full accent-blue-500" />
-            </div>
+                <div>
+                  <label className="text-sm font-medium block mb-1">
+                    Strength <span className="font-mono text-blue-400 ml-1">{brushStrength}%</span>
+                  </label>
+                  <input type="range" min="1" max="100" value={brushStrength} onChange={e => setBrushStrength(parseInt(e.target.value))} className="w-full accent-blue-500" />
+                </div>
 
-            <div>
-              <label className="text-sm font-medium block mb-1">
-                Hardness <span className="font-mono text-blue-400 ml-1">{brushHardness}%</span>
-              </label>
-              <input type="range" min="0" max="100" value={brushHardness} onChange={e => setBrushHardness(parseInt(e.target.value))} className="w-full accent-blue-500" />
-              <p className="text-xs text-gray-500 mt-0.5">0 = feathered edge, 100 = hard edge</p>
-            </div>
-          </div>
+                <div>
+                  <label className="text-sm font-medium block mb-1">
+                    Hardness <span className="font-mono text-blue-400 ml-1">{brushHardness}%</span>
+                  </label>
+                  <input type="range" min="0" max="100" value={brushHardness} onChange={e => setBrushHardness(parseInt(e.target.value))} className="w-full accent-blue-500" />
+                </div>
+              </div>
 
-          <div className="bg-gray-800 p-3 rounded-lg space-y-1.5">
-            <button
-              onClick={undo}
-              disabled={undoStack.length === 0}
-              className="w-full px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-sm transition"
-            >
-              Undo ({undoStack.length})
-            </button>
-          </div>
+              <button
+                onClick={openDotCleanup}
+                className="w-full flex items-center justify-center gap-2 px-3 py-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-semibold transition"
+              >
+                <Sparkles size={15} className="text-blue-400" />
+                Clean Dots
+              </button>
 
-          <button onClick={proceed} className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition">
-            Continue to Export
-          </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={undo}
+                  disabled={undoStack.length === 0}
+                  className="flex-1 px-3 py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-sm transition"
+                >
+                  Undo ({undoStack.length})
+                </button>
+                <button onClick={proceed} className="flex-1 px-3 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition">
+                  Continue
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
