@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState } from '../App';
 
-// Order chosen to match how these are reached for: Neato first.
 const TEMPLATES = [
   { name: 'Neato Regular', short: 'Neato Reg',   label: '12"×16"', width: 3600, height: 4800 },
   { name: 'Neato Jumbo',   short: 'Neato Jumbo', label: '15"×18"', width: 4500, height: 5400 },
@@ -9,6 +8,9 @@ const TEMPLATES = [
   { name: 'P-Partner MAX',       short: 'P-Partner MAX', label: '20"×20"', width: 6000, height: 6000 },
 ];
 const DEFAULT_TEMPLATE = 1; // Neato Jumbo
+// Largest real dimension across all platens — used to size the proportional
+// preview chips so Reg visibly reads smaller than Jumbo, etc.
+const MAX_TEMPLATE_DIM = Math.max(...TEMPLATES.flatMap(t => [t.width, t.height]));
 
 type Props = {
   state: AppState;
@@ -25,6 +27,7 @@ type Interaction =
 
 const HANDLE_R = 10;
 const HANDLE_HIT = 28;
+const MARGIN = 10; // canvas breathing room so edge strokes/handles aren't clipped
 
 function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
   const sz = 12;
@@ -49,9 +52,6 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
   const [platen, setPlaten] = useState<{ width: number; height: number } | null>(null);
   const [preset, setPreset] = useState<Preset>('fit');
 
-  // Image = a scale multiplier on the native source + a top-left position on
-  // the platen. No pixel resizing; the canvas draws it scaled and export
-  // composites once at full resolution.
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
 
@@ -82,15 +82,12 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
 
   useEffect(() => {
     if (!platen) return;
-    const availW = Math.max(box.w - 24, 140);
-    const availH = Math.max(box.h - 24, 140);
+    const availW = Math.max(box.w - 2 * MARGIN - 4, 140);
+    const availH = Math.max(box.h - 2 * MARGIN - 4, 140);
     setDisplayScale(Math.min(availW / platen.width, availH / platen.height));
   }, [platen, box]);
 
   // --- Placement presets ----------------------------------------------------
-  // FIT: whole image, as large as it goes while fully visible (scales up too),
-  //   pinned to the TOP and horizontally centered.
-  // ACTUAL: native 1:1, centered.  FILL: covers the platen (crops), centered.
   const placeFit = useCallback((d: { width: number; height: number }) => {
     const s = Math.min(d.width / srcW, d.height / srcH);
     setScale(s);
@@ -116,8 +113,6 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     else placeFill(d);
   };
 
-  // First entry: reuse the platen carried from a previous image if there is
-  // one, otherwise default to Neato Jumbo. Fit placement (top-centered).
   useEffect(() => {
     if (didInit.current || !src) return;
     didInit.current = true;
@@ -133,7 +128,6 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     const d = { width: t.width, height: t.height };
     setPlaten(d);
     setSelectedTemplate(t.name);
-    // Persist immediately so the choice carries to the next batch image.
     updateState({ platenDimensions: d, platenName: t.name });
     if (preset === 'actual') placeActual(d);
     else if (preset === 'fill') placeFill(d);
@@ -145,8 +139,6 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
   const minScale = srcW > 0 ? Math.max(0.04, 120 / Math.max(srcW, srcH)) : 0.04;
   const maxScale = platen ? Math.max(platen.width / srcW, platen.height / srcH) * 3 : 8;
 
-  // True when any part of the design falls outside the platen — used to warn
-  // that content will be cut off.
   const offEdge = !!platen && (
     pos.x < -1 || pos.y < -1 ||
     pos.x + dispW > platen.width + 1 ||
@@ -167,17 +159,28 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     if (!canvas || !sc || !platen) return;
 
     const rs = displayScale;
-    const cw = Math.max(1, Math.round(platen.width * rs));
-    const ch = Math.max(1, Math.round(platen.height * rs));
-    if (canvas.width !== cw || canvas.height !== ch) {
-      canvas.width = cw;
-      canvas.height = ch;
-      canvas.style.width = cw + 'px';
-      canvas.style.height = ch + 'px';
+    const pw = platen.width * rs;          // platen area, CSS px
+    const ph = platen.height * rs;
+    const cssW = pw + 2 * MARGIN;
+    const cssH = ph + 2 * MARGIN;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+    const bw = Math.round(cssW * dpr);
+    const bh = Math.round(cssH * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
     }
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
 
     const ctx = canvas.getContext('2d')!;
-    drawCheckerboard(ctx, cw, ch);
+    // High-DPI backing store + a margin so nothing on the platen edge clips.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.translate(MARGIN, MARGIN);
+
+    drawCheckerboard(ctx, pw, ph);
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -188,25 +191,25 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     ctx.lineWidth = 1.5;
     ctx.setLineDash([5, 4]);
     if (snapH) {
-      const gx = snapH === 'left' ? 0.75 : snapH === 'right' ? cw - 0.75 : cw / 2;
-      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, ch); ctx.stroke();
+      const gx = snapH === 'left' ? 0 : snapH === 'right' ? pw : pw / 2;
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, ph); ctx.stroke();
     }
     if (snapV) {
-      const gy = snapV === 'top' ? 0.75 : snapV === 'bottom' ? ch - 0.75 : ch / 2;
-      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cw, gy); ctx.stroke();
+      const gy = snapV === 'top' ? 0 : snapV === 'bottom' ? ph : ph / 2;
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(pw, gy); ctx.stroke();
     }
     ctx.setLineDash([]);
 
-    // Image outline — red when it spills past the platen.
+    // Image outline — red when it spills past the platen edge.
     ctx.strokeStyle = offEdge ? '#f87171' : '#60a5fa';
     ctx.lineWidth = 2;
     ctx.strokeRect(pos.x * rs, pos.y * rs, dispW * rs, dispH * rs);
 
-    // Corner resize handles, clamped inside the canvas so they stay tappable.
+    // Corner handles, clamped to the platen so they stay visible + tappable.
     const pts = cornerPoints();
     (Object.keys(pts) as Corner[]).forEach((c) => {
-      const cx = Math.min(Math.max(pts[c].x * rs, HANDLE_R), cw - HANDLE_R);
-      const cy = Math.min(Math.max(pts[c].y * rs, HANDLE_R), ch - HANDLE_R);
+      const cx = Math.min(Math.max(pts[c].x * rs, HANDLE_R), pw - HANDLE_R);
+      const cy = Math.min(Math.max(pts[c].y * rs, HANDLE_R), ph - HANDLE_R);
       ctx.beginPath();
       ctx.arc(cx, cy, HANDLE_R, 0, Math.PI * 2);
       ctx.fillStyle = '#fff';
@@ -217,17 +220,17 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     });
 
     // Platen edge.
-    ctx.strokeStyle = '#111827';
+    ctx.strokeStyle = '#1f2937';
     ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, cw - 2, ch - 2);
+    ctx.strokeRect(0, 0, pw, ph);
   }, [platen, displayScale, pos, dispW, dispH, snapH, snapV, offEdge, cornerPoints]);
 
   // --- Pointer interaction --------------------------------------------------
   const toPlaten = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = canvasRef.current!.getBoundingClientRect();
     return {
-      x: (e.clientX - rect.left) / displayScale,
-      y: (e.clientY - rect.top) / displayScale,
+      x: (e.clientX - rect.left - MARGIN) / displayScale,
+      y: (e.clientY - rect.top - MARGIN) / displayScale,
     };
   };
 
@@ -361,13 +364,7 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
         )}
       </div>
 
-      {offEdge && (
-        <div className="shrink-0 text-xs font-medium text-red-300 bg-red-900/40 border border-red-700/50 rounded-lg px-3 py-1.5 text-center">
-          Part of the design is past the platen edge — it will be cut off.
-        </div>
-      )}
-
-      {/* Placement — the primary control. Big, easy targets. */}
+      {/* Placement — primary control, big targets. */}
       <div className="grid grid-cols-3 gap-2 shrink-0">
         {PRESETS.map(p => (
           <button
@@ -387,22 +384,33 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
         ))}
       </div>
 
-      {/* Platen size — secondary. */}
+      {/* Platen size — each chip shows a proportional preview of the area. */}
       <div className="grid grid-cols-2 gap-2 shrink-0">
-        {TEMPLATES.map(t => (
-          <button
-            key={t.name}
-            onClick={() => selectTemplate(t)}
-            className={`px-3 py-2 rounded-lg text-left border transition ${
-              selectedTemplate === t.name
-                ? 'border-blue-500 bg-blue-900/30'
-                : 'border-gray-700 bg-gray-800 hover:border-gray-600'
-            }`}
-          >
-            <div className="text-xs font-semibold leading-tight">{t.short}</div>
-            <div className="text-[10px] text-gray-500 leading-tight tabular-nums">{t.label}</div>
-          </button>
-        ))}
+        {TEMPLATES.map(t => {
+          const sel = selectedTemplate === t.name;
+          const miniW = (t.width / MAX_TEMPLATE_DIM) * 30;
+          const miniH = (t.height / MAX_TEMPLATE_DIM) * 30;
+          return (
+            <button
+              key={t.name}
+              onClick={() => selectTemplate(t)}
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border transition ${
+                sel ? 'border-blue-500 bg-blue-900/30' : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+              }`}
+            >
+              <span className="shrink-0 flex items-center justify-center" style={{ width: 32, height: 32 }}>
+                <span
+                  className={`rounded-sm border-2 ${sel ? 'border-blue-400 bg-blue-400/20' : 'border-gray-500'}`}
+                  style={{ width: miniW, height: miniH }}
+                />
+              </span>
+              <span className="min-w-0 text-left">
+                <span className="block text-xs font-semibold leading-tight">{t.short}</span>
+                <span className="block text-[10px] text-gray-500 leading-tight tabular-nums">{t.label}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex gap-2 shrink-0">

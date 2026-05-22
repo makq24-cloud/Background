@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ZoomIn, ZoomOut, Pipette, Maximize2 } from 'lucide-react';
 import { AppState } from '../App';
-import { applyTrueColorToAlpha, downscalePreview, detectDominantShade } from '../utils/alphaEngine';
+import { applyTrueColorToAlpha, downscalePreview, detectDominantShade, detectBackgroundShade } from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
 import { imageDataToCanvas, cloneImageData } from '../utils/imageUtils';
+import { analyzeSpecks, speckIds, removeSpecks } from '../utils/dotCleanup';
 
 type Props = {
   state: AppState;
@@ -44,6 +45,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const [shirtDetecting, setShirtDetecting] = useState<'dark' | 'light' | null>(null);
   const [committing, setCommitting] = useState(false);
   const [autoDetected, setAutoDetected] = useState(false);
+  const [dotCleanup, setDotCleanup] = useState(0);
+
+  // Dot cleanup: the slider sets the largest speck (in preview pixels) that
+  // gets erased. Quadratic so the low end stays fine-grained.
+  const dotMaxArea = Math.round((dotCleanup / 100) ** 2 * 600);
 
   const sourceImg = state.canvasData;
   const isOriginalView = bgMode === 'original';
@@ -68,6 +74,32 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     const processed = applyTrueColorToAlpha(previewSource, r, g, b, sensitivity, softness);
     setProcessedPreview(processed);
   }, [previewSource, sensitivity, softness, targetColor]);
+
+  // Connected-component analysis — only computed while dot cleanup is on.
+  const speckAnalysis = useMemo(
+    () => (dotCleanup > 0 && processedPreview ? analyzeSpecks(processedPreview) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [processedPreview, dotCleanup > 0]
+  );
+
+  // Red overlay marking exactly which specks the slider will erase, plus a
+  // count so the user can see it's catching dots without eating the artwork.
+  const speckOverlay = useMemo<{ overlay: ImageData | null; count: number }>(() => {
+    if (!speckAnalysis || dotMaxArea <= 0) return { overlay: null, count: 0 };
+    const ids = speckIds(speckAnalysis, dotMaxArea);
+    if (ids.length === 0) return { overlay: null, count: 0 };
+    const idSet = new Set(ids);
+    const { width, height, labels } = speckAnalysis;
+    const ov = new ImageData(width, height);
+    const d = ov.data;
+    for (let p = 0; p < labels.length; p++) {
+      if (idSet.has(labels[p])) {
+        const o = p << 2;
+        d[o] = 255; d[o + 1] = 30; d[o + 2] = 30; d[o + 3] = 210;
+      }
+    }
+    return { overlay: ov, count: ids.length };
+  }, [speckAnalysis, dotMaxArea]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -107,6 +139,12 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     const tmp = imageDataToCanvas(activePreview);
     ctx.drawImage(tmp, 0, 0);
 
+    // Dot cleanup: tint the specks the slider will erase bright red, so the
+    // user can confirm it's catching stray dots and not biting the artwork.
+    if (dotCleanup > 0 && speckOverlay.overlay && bgMode !== 'original' && bgMode !== 'mask') {
+      ctx.drawImage(imageDataToCanvas(speckOverlay.overlay), 0, 0);
+    }
+
     // Mask preview: overlay a red tint proportional to alpha loss so the user
     // can see WHICH pixels the current settings are about to remove before
     // they commit. Built per-redraw from original vs processed previews.
@@ -129,7 +167,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       const overlayCanvas = imageDataToCanvas(overlay);
       ctx.drawImage(overlayCanvas, 0, 0);
     }
-  }, [activePreview, bgMode, customBgColor, zoom, originalPreview, processedPreview]);
+  }, [activePreview, bgMode, customBgColor, zoom, originalPreview, processedPreview, dotCleanup, speckOverlay]);
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
@@ -190,7 +228,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     if (autoDetected || !sourceImg) return;
     setAutoDetected(true);
     if (!state.alphaUserTuned) {
-      autoDetectShirt('dark');
+      // Detect whether the background is light or dark first, instead of
+      // always assuming dark — picks the right target on a white-bg image.
+      autoDetectShirt(detectBackgroundShade(sourceImg));
     }
   }, [sourceImg, autoDetected, autoDetectShirt, state.alphaUserTuned]);
 
@@ -207,6 +247,15 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     goToStep(4);
   };
 
+  // Apply the dot cleanup to a full-resolution result. The slider's area is
+  // in preview pixels, so scale it up by the preview/full ratio (area ∝ s²).
+  const withDotCleanup = (img: ImageData): ImageData => {
+    if (dotCleanup <= 0 || !previewSource) return img;
+    const s = previewSource.width / img.width;
+    const fullMax = Math.round(dotMaxArea / (s * s));
+    return removeSpecks(img, analyzeSpecks(img), fullMax);
+  };
+
   const proceed = async () => {
     if (!sourceImg || committing) return;
     setCommitting(true);
@@ -219,7 +268,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // (source, untouched bytes) without a separate clone allocation.
       const { prealpha, result } = await runAlpha(sourceImg, r, g, b, sensitivity, softness);
       updateState({
-        canvasData: result,
+        canvasData: withDotCleanup(result),
         prealphaCanvas: prealpha,
         alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
         alphaUserTuned: true,
@@ -257,7 +306,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       try {
         const final = applyTrueColorToAlpha(sourceImg, r, g, b, sensitivity, softness);
         updateState({
-          canvasData: final,
+          canvasData: withDotCleanup(final),
           prealphaCanvas: sourceImg,
           alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
           alphaUserTuned: true,
@@ -430,6 +479,16 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
             onChange={e => { setSoftness(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
             className="flex-1 accent-blue-500" />
           <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{softness}</span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-semibold w-24 shrink-0">Dot Cleanup</label>
+          <input type="range" min="0" max="100" value={dotCleanup}
+            onChange={e => setDotCleanup(parseInt(e.target.value))}
+            className="flex-1 accent-red-500" />
+          <span className="font-mono text-red-400 text-sm w-12 text-right tabular-nums">
+            {dotCleanup > 0 ? `${speckOverlay.count} ●` : '—'}
+          </span>
         </div>
 
         <button onClick={proceed} disabled={committing}

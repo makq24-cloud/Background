@@ -4,7 +4,6 @@ import ImportStep from './steps/ImportStep';
 import CropStep from './steps/CropStep';
 import PlatenStep from './steps/PlatenStep';
 import AlphaStep from './steps/AlphaStep';
-import RestoreStep from './steps/RestoreStep';
 import ExportStep from './steps/ExportStep';
 import { loadSession, saveSession, clearSession, PersistedSession } from './utils/persistence';
 
@@ -31,10 +30,10 @@ export type AppState = {
 //   1 Import · 2 Platen · 3 Background · 4 Export · 5 Trim · 6 Touch-Up
 const MAIN_STEPS = ['Import', 'Platen', 'Background', 'Export'];
 const STEP_LABEL: Record<number, string> = {
-  1: 'Import', 2: 'Platen', 3: 'Background', 4: 'Export', 5: 'Trim', 6: 'Touch-Up',
+  1: 'Import', 2: 'Platen', 3: 'Background', 4: 'Export', 5: 'Trim',
 };
 // Which of the 4 progress dots is lit for a given step (detours map to their host).
-const DOT_INDEX: Record<number, number> = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 1, 6: 3 };
+const DOT_INDEX: Record<number, number> = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 1 };
 
 const INITIAL_STATE: AppState = {
   currentStep: 1,
@@ -120,7 +119,6 @@ function App() {
   const goBack = () => {
     // Trim returns to Platen; Touch-Up returns to Export; otherwise step back.
     if (state.currentStep === 5) { goToStep(2); return; }
-    if (state.currentStep === 6) { goToStep(4); return; }
     if (state.currentStep > 1) goToStep(state.currentStep - 1);
   };
 
@@ -243,9 +241,6 @@ function App() {
           )}
           {state.currentStep === 5 && (
             <CropStep state={state} updateState={updateState} goToStep={goToStep} />
-          )}
-          {state.currentStep === 6 && (
-            <RestoreStep state={state} updateState={updateState} goToStep={goToStep} />
           )}
         </div>
       </main>

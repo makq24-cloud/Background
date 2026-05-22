@@ -20,7 +20,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
 
   // Review preview defaults to Black per the project convention — most of
   // the work prints on dark shirts.
-  const [reviewBg, setReviewBg] = useState<ReviewBg>('black');
+  const [reviewBg, setReviewBg] = useState<ReviewBg>('checker');
   const previewWrapRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const [containerW, setContainerW] = useState(360);
@@ -297,13 +297,6 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
               <canvas ref={previewCanvasRef} style={{ display: 'block' }} />
             </div>
           </div>
-
-          <button
-            onClick={() => goToStep(6)}
-            className="w-full px-4 py-2.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm font-medium text-gray-300 transition"
-          >
-            Touch-Up & Dot Cleanup
-          </button>
 
           {/* File info + filename */}
           <div className="bg-gray-800 p-4 rounded-lg space-y-3">

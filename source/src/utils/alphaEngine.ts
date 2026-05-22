@@ -435,3 +435,24 @@ export function detectDominantShade(
   // Last resort: return whatever the border found, even if sparse.
   return borderPick ? borderPick.color : null;
 }
+// Decides whether the image's background is light or dark by sampling the
+// border ring. Used to pick the right auto-detect mode on entry instead of
+// always assuming a dark background.
+export function detectBackgroundShade(img: ImageData): 'dark' | 'light' {
+  const { width: w, height: h, data } = img;
+  const border = Math.max(4, Math.round(Math.min(w, h) * 0.04));
+  let sum = 0;
+  let count = 0;
+  for (let y = 0; y < h; y++) {
+    const edgeRow = y < border || y >= h - border;
+    for (let x = 0; x < w; x++) {
+      if (!edgeRow && x >= border && x < w - border) { x = w - border - 1; continue; }
+      const i = (y * w + x) * 4;
+      if (data[i + 3] < 128) continue; // ignore already-transparent pixels
+      sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      count++;
+    }
+  }
+  if (count === 0) return 'dark';
+  return sum / count > 128 ? 'light' : 'dark';
+}
