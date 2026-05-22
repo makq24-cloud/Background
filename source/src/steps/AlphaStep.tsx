@@ -395,8 +395,10 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
               eyedropperActive ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-gray-700 hover:bg-gray-600'
             }`}
           >
-            <Pipette size={13} />
-            {eyedropperActive ? 'Tap image…' : 'Pick'}
+            {eyedropperActive && hoveredColor
+              ? <span className="w-3.5 h-3.5 rounded-sm border border-white/60 shrink-0" style={{ background: hoveredColor }} />
+              : <Pipette size={13} />}
+            {eyedropperActive ? (hoveredColor ?? 'Tap image…') : 'Pick'}
           </button>
           <button
             onClick={() => autoDetectShirt('dark')}
