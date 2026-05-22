@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState } from '../App';
 
+// Order chosen to match how these are reached for: Neato first.
 const TEMPLATES = [
-  { name: 'P-Partner Regular',   short: 'P-Partner',     label: '16"×21"', width: 4800, height: 6300 },
-  { name: 'P-Partner MAX',       short: 'P-Partner MAX', label: '20"×20"', width: 6000, height: 6000 },
   { name: 'Neato Regular', short: 'Neato Reg',   label: '12"×16"', width: 3600, height: 4800 },
   { name: 'Neato Jumbo',   short: 'Neato Jumbo', label: '15"×18"', width: 4500, height: 5400 },
+  { name: 'P-Partner Regular',   short: 'P-Partner',     label: '16"×21"', width: 4800, height: 6300 },
+  { name: 'P-Partner MAX',       short: 'P-Partner MAX', label: '20"×20"', width: 6000, height: 6000 },
 ];
+const DEFAULT_TEMPLATE = 1; // Neato Jumbo
 
 type Props = {
   state: AppState;
@@ -14,15 +16,15 @@ type Props = {
   goToStep: (step: number) => void;
 };
 
-type Preset = 'whole' | 'actual' | 'fill' | 'custom';
+type Preset = 'fit' | 'actual' | 'fill' | 'custom';
 type Corner = 'tl' | 'tr' | 'bl' | 'br';
 type Interaction =
   | { kind: 'none' }
   | { kind: 'move'; px: number; py: number; ox: number; oy: number }
   | { kind: 'resize'; corner: Corner; ax: number; ay: number };
 
-const HANDLE_R = 9;          // drawn handle radius, CSS px
-const HANDLE_HIT = 26;       // touch hit radius, CSS px
+const HANDLE_R = 10;
+const HANDLE_HIT = 28;
 
 function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
   const sz = 12;
@@ -36,7 +38,7 @@ function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
 export default function PlatenStep({ state, updateState, goToStep }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const srcCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const src = state.croppedImage;
@@ -45,22 +47,21 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
 
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [platen, setPlaten] = useState<{ width: number; height: number } | null>(null);
-  const [preset, setPreset] = useState<Preset>('whole');
+  const [preset, setPreset] = useState<Preset>('fit');
 
-  // The image is described purely as a scale multiplier on the native source
-  // plus a top-left position on the platen. No pre-resizing of pixels — the
-  // canvas draws it scaled, and export composites it once at full resolution.
+  // Image = a scale multiplier on the native source + a top-left position on
+  // the platen. No pixel resizing; the canvas draws it scaled and export
+  // composites once at full resolution.
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
 
   const [displayScale, setDisplayScale] = useState(1);
-  const [container, setContainer] = useState({ w: 360, h: 420 });
+  const [box, setBox] = useState({ w: 340, h: 420 });
   const [interaction, setInteraction] = useState<Interaction>({ kind: 'none' });
   const [snapH, setSnapH] = useState<'left' | 'center' | 'right' | null>(null);
   const [snapV, setSnapV] = useState<'top' | 'center' | 'bottom' | null>(null);
   const didInit = useRef(false);
 
-  // Build the source canvas once.
   useEffect(() => {
     if (!src) return;
     const c = document.createElement('canvas');
@@ -70,92 +71,84 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     srcCanvasRef.current = c;
   }, [src]);
 
-  // Track the container so the platen preview always fits with no scrolling.
   useEffect(() => {
-    const el = containerRef.current;
+    const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => {
-      setContainer({ w: e.contentRect.width, h: e.contentRect.height });
-    });
+    const ro = new ResizeObserver(([e]) => setBox({ w: e.contentRect.width, h: e.contentRect.height }));
     ro.observe(el);
-    setContainer({ w: el.clientWidth, h: el.clientHeight });
+    setBox({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
     if (!platen) return;
-    const availW = Math.max(container.w - 16, 160);
-    const availH = Math.max(container.h - 16, 160);
+    const availW = Math.max(box.w - 24, 140);
+    const availH = Math.max(box.h - 24, 140);
     setDisplayScale(Math.min(availW / platen.width, availH / platen.height));
-  }, [platen, container]);
+  }, [platen, box]);
 
   // --- Placement presets ----------------------------------------------------
-  // WHOLE: the whole image, as large as it can be while fully visible (scales
-  //   UP as well as down), pinned to the TOP and horizontally centered.
-  // ACTUAL: native 1:1 pixels, centered.
-  // FILL: scaled to cover the entire platen (may crop), centered.
-  const placeWhole = useCallback((dims: { width: number; height: number }) => {
-    const s = Math.min(dims.width / srcW, dims.height / srcH);
+  // FIT: whole image, as large as it goes while fully visible (scales up too),
+  //   pinned to the TOP and horizontally centered.
+  // ACTUAL: native 1:1, centered.  FILL: covers the platen (crops), centered.
+  const placeFit = useCallback((d: { width: number; height: number }) => {
+    const s = Math.min(d.width / srcW, d.height / srcH);
     setScale(s);
-    setPos({ x: (dims.width - srcW * s) / 2, y: 0 });
+    setPos({ x: (d.width - srcW * s) / 2, y: 0 });
   }, [srcW, srcH]);
 
-  const placeActual = useCallback((dims: { width: number; height: number }) => {
+  const placeActual = useCallback((d: { width: number; height: number }) => {
     setScale(1);
-    setPos({ x: (dims.width - srcW) / 2, y: (dims.height - srcH) / 2 });
+    setPos({ x: (d.width - srcW) / 2, y: (d.height - srcH) / 2 });
   }, [srcW, srcH]);
 
-  const placeFill = useCallback((dims: { width: number; height: number }) => {
-    const s = Math.max(dims.width / srcW, dims.height / srcH);
+  const placeFill = useCallback((d: { width: number; height: number }) => {
+    const s = Math.max(d.width / srcW, d.height / srcH);
     setScale(s);
-    setPos({ x: (dims.width - srcW * s) / 2, y: (dims.height - srcH * s) / 2 });
+    setPos({ x: (d.width - srcW * s) / 2, y: (d.height - srcH * s) / 2 });
   }, [srcW, srcH]);
 
-  const applyPreset = (p: Exclude<Preset, 'custom'>, dims = platen) => {
-    if (!dims) return;
+  const applyPreset = (p: Exclude<Preset, 'custom'>, d = platen) => {
+    if (!d) return;
     setPreset(p);
-    if (p === 'whole') placeWhole(dims);
-    else if (p === 'actual') placeActual(dims);
-    else placeFill(dims);
+    if (p === 'fit') placeFit(d);
+    else if (p === 'actual') placeActual(d);
+    else placeFill(d);
   };
 
-  // On first entry: auto-pick the closest-aspect template and default to
-  // WHOLE — the whole image maxed out and pinned top-center.
+  // First entry: default to Neato Jumbo, Fit placement (top-centered).
   useEffect(() => {
     if (didInit.current || !src) return;
     didInit.current = true;
-    const ratio = srcW / srcH;
-    let best = TEMPLATES[0];
-    let bestDelta = Infinity;
-    for (const t of TEMPLATES) {
-      const d = Math.abs(t.width / t.height - ratio);
-      if (d < bestDelta) { bestDelta = d; best = t; }
-    }
-    const dims = { width: best.width, height: best.height };
-    setPlaten(dims);
-    setSelectedTemplate(best.name);
-    placeWhole(dims);
-  }, [src, srcW, srcH, placeWhole]);
+    const t = TEMPLATES[DEFAULT_TEMPLATE];
+    const d = { width: t.width, height: t.height };
+    setPlaten(d);
+    setSelectedTemplate(t.name);
+    placeFit(d);
+  }, [src, placeFit]);
 
   const selectTemplate = (t: typeof TEMPLATES[0]) => {
-    const dims = { width: t.width, height: t.height };
-    setPlaten(dims);
+    const d = { width: t.width, height: t.height };
+    setPlaten(d);
     setSelectedTemplate(t.name);
-    // Re-apply the active preset on the new platen (custom falls back to whole).
-    if (preset === 'actual') placeActual(dims);
-    else if (preset === 'fill') placeFill(dims);
-    else placeWhole(dims);
+    if (preset === 'actual') placeActual(d);
+    else if (preset === 'fill') placeFill(d);
+    else placeFit(d);
   };
 
-  // --- Geometry helpers -----------------------------------------------------
   const dispW = srcW * scale;
   const dispH = srcH * scale;
-
   const minScale = srcW > 0 ? Math.max(0.04, 120 / Math.max(srcW, srcH)) : 0.04;
   const maxScale = platen ? Math.max(platen.width / srcW, platen.height / srcH) * 3 : 8;
 
-  // Handle centres in platen coordinates, clamped so they stay grabbable even
-  // when the image overflows the platen (Fill mode).
+  // True when any part of the design falls outside the platen — used to warn
+  // that content will be cut off.
+  const offEdge = !!platen && (
+    pos.x < -1 || pos.y < -1 ||
+    pos.x + dispW > platen.width + 1 ||
+    pos.y + dispH > platen.height + 1
+  );
+
   const cornerPoints = useCallback((): Record<Corner, { x: number; y: number }> => ({
     tl: { x: pos.x,         y: pos.y },
     tr: { x: pos.x + dispW, y: pos.y },
@@ -170,8 +163,8 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     if (!canvas || !sc || !platen) return;
 
     const rs = displayScale;
-    const cw = Math.round(platen.width * rs);
-    const ch = Math.round(platen.height * rs);
+    const cw = Math.max(1, Math.round(platen.width * rs));
+    const ch = Math.max(1, Math.round(platen.height * rs));
     if (canvas.width !== cw || canvas.height !== ch) {
       canvas.width = cw;
       canvas.height = ch;
@@ -200,13 +193,12 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     }
     ctx.setLineDash([]);
 
-    // Image outline.
-    ctx.strokeStyle = '#60a5fa';
+    // Image outline — red when it spills past the platen.
+    ctx.strokeStyle = offEdge ? '#f87171' : '#60a5fa';
     ctx.lineWidth = 2;
     ctx.strokeRect(pos.x * rs, pos.y * rs, dispW * rs, dispH * rs);
 
-    // Corner resize handles, clamped inside the canvas so they're always
-    // visible and tappable.
+    // Corner resize handles, clamped inside the canvas so they stay tappable.
     const pts = cornerPoints();
     (Object.keys(pts) as Corner[]).forEach((c) => {
       const cx = Math.min(Math.max(pts[c].x * rs, HANDLE_R), cw - HANDLE_R);
@@ -220,11 +212,11 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
       ctx.stroke();
     });
 
-    // Platen border.
-    ctx.strokeStyle = '#1f2937';
+    // Platen edge.
+    ctx.strokeStyle = '#111827';
     ctx.lineWidth = 2;
     ctx.strokeRect(1, 1, cw - 2, ch - 2);
-  }, [platen, displayScale, pos, dispW, dispH, snapH, snapV, cornerPoints]);
+  }, [platen, displayScale, pos, dispW, dispH, snapH, snapV, offEdge, cornerPoints]);
 
   // --- Pointer interaction --------------------------------------------------
   const toPlaten = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -255,14 +247,12 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
 
     const corner = hitCorner(x, y);
     if (corner) {
-      // Anchor = the opposite corner; it stays pinned during the resize.
       const pts = cornerPoints();
       const opp: Record<Corner, Corner> = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
       const a = pts[opp[corner]];
       setInteraction({ kind: 'resize', corner, ax: a.x, ay: a.y });
       return;
     }
-    // Inside the image → move.
     if (x >= pos.x && x <= pos.x + dispW && y >= pos.y && y <= pos.y + dispH) {
       setInteraction({ kind: 'move', px: x, py: y, ox: pos.x, oy: pos.y });
     }
@@ -277,8 +267,6 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     if (interaction.kind === 'move') {
       let nx = interaction.ox + (x - interaction.px);
       let ny = interaction.oy + (y - interaction.py);
-
-      // Snap each axis independently to left/center/right and top/center/bottom.
       const cx = (platen.width - dispW) / 2;
       const cy = (platen.height - dispH) / 2;
       let sh: typeof snapH = null;
@@ -289,7 +277,6 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
       if (Math.abs(ny) < snapPx) { ny = 0; sv = 'top'; }
       else if (Math.abs(ny - cy) < snapPx) { ny = cy; sv = 'center'; }
       else if (Math.abs(ny - (platen.height - dispH)) < snapPx) { ny = platen.height - dispH; sv = 'bottom'; }
-
       setSnapH(sh);
       setSnapV(sv);
       setPos({ x: nx, y: ny });
@@ -299,30 +286,20 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
 
     if (interaction.kind === 'resize') {
       const { corner, ax, ay } = interaction;
-      // Corner direction vector (native dimensions, signed away from anchor).
       const sx = corner === 'tr' || corner === 'br' ? 1 : -1;
       const sy = corner === 'bl' || corner === 'br' ? 1 : -1;
       const vecX = sx * srcW;
       const vecY = sy * srcH;
-      // Aspect-locked scale = projection of the pointer (from anchor) onto the
-      // image diagonal. Lets the dragged corner follow the finger naturally.
       let s = ((x - ax) * vecX + (y - ay) * vecY) / (srcW * srcW + srcH * srcH);
-
-      // Snap scale to the meaningful stops: fit-width, fit-height, 1:1.
       const stops = [platen.width / srcW, platen.height / srcH, 1];
       for (const st of stops) {
         if (Math.abs(s - st) / st < 0.04) { s = st; break; }
       }
       s = Math.min(Math.max(s, minScale), maxScale);
-
       const w = srcW * s;
       const h = srcH * s;
-      // Keep the anchor corner pinned.
-      const nx = sx > 0 ? ax : ax - w;
-      const ny = sy > 0 ? ay : ay - h;
-
       setScale(s);
-      setPos({ x: nx, y: ny });
+      setPos({ x: sx > 0 ? ax : ax - w, y: sy > 0 ? ay : ay - h });
       setPreset('custom');
     }
   };
@@ -355,25 +332,15 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     goToStep(4);
   };
 
-  const presetBtn = (id: Exclude<Preset, 'custom'>, label: string) => (
-    <button
-      key={id}
-      onClick={() => applyPreset(id)}
-      className={`px-2 py-1.5 rounded-md text-xs font-medium transition ${
-        preset === id ? 'bg-blue-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-      }`}
-    >
-      {label}
-    </button>
-  );
+  const PRESETS: { id: Exclude<Preset, 'custom'>; label: string; sub: string }[] = [
+    { id: 'fit',    label: 'Fit',    sub: 'all visible' },
+    { id: 'fill',   label: 'Fill',   sub: 'cover' },
+    { id: 'actual', label: 'Actual', sub: '1:1 size' },
+  ];
 
   return (
-    <div className="space-y-2.5">
-      <div
-        ref={containerRef}
-        className="rounded-lg border border-gray-700 bg-gray-950 flex items-center justify-center overflow-hidden"
-        style={{ height: 'calc(100dvh - 300px)', minHeight: '280px' }}
-      >
+    <div className="h-full flex flex-col gap-2.5">
+      <div ref={wrapRef} className="flex-1 min-h-0 flex items-start justify-center">
         {platen && (
           <canvas
             ref={canvasRef}
@@ -390,12 +357,39 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-1.5">
+      {offEdge && (
+        <div className="shrink-0 text-xs font-medium text-red-300 bg-red-900/40 border border-red-700/50 rounded-lg px-3 py-1.5 text-center">
+          Part of the design is past the platen edge — it will be cut off.
+        </div>
+      )}
+
+      {/* Placement — the primary control. Big, easy targets. */}
+      <div className="grid grid-cols-3 gap-2 shrink-0">
+        {PRESETS.map(p => (
+          <button
+            key={p.id}
+            onClick={() => applyPreset(p.id)}
+            className={`flex flex-col items-center justify-center py-3 rounded-xl font-semibold transition ${
+              preset === p.id
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+            }`}
+          >
+            <span className="text-base leading-tight">{p.label}</span>
+            <span className={`text-[10px] leading-tight ${preset === p.id ? 'text-blue-200' : 'text-gray-500'}`}>
+              {p.sub}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Platen size — secondary. */}
+      <div className="grid grid-cols-2 gap-2 shrink-0">
         {TEMPLATES.map(t => (
           <button
             key={t.name}
             onClick={() => selectTemplate(t)}
-            className={`px-2.5 py-1.5 rounded-md text-left border transition ${
+            className={`px-3 py-2 rounded-lg text-left border transition ${
               selectedTemplate === t.name
                 ? 'border-blue-500 bg-blue-900/30'
                 : 'border-gray-700 bg-gray-800 hover:border-gray-600'
@@ -407,18 +401,12 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
         ))}
       </div>
 
-      <div className="grid grid-cols-3 gap-1.5">
-        {presetBtn('whole', 'Whole')}
-        {presetBtn('actual', 'Actual')}
-        {presetBtn('fill', 'Fill')}
-      </div>
-
       <button
         onClick={proceed}
         disabled={!platen}
-        className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition text-sm"
+        className="shrink-0 w-full px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl font-semibold transition"
       >
-        Continue to Background Removal
+        Continue
       </button>
     </div>
   );

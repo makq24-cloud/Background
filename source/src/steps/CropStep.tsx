@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { AppState } from '../App';
 import { imageDataToCanvas, cropImageData, detectBoundingBox } from '../utils/imageUtils';
 
@@ -17,15 +16,9 @@ type DragState =
   | { kind: 'moving'; sx: number; sy: number; ox: number; oy: number }
   | { kind: 'resizing'; handle: HandleId; sx: number; sy: number; snap: CropBox };
 
-const HANDLE_RADIUS_PX = 6;
-const HANDLE_HIT_PX = 12;
+const HANDLE_RADIUS_PX = 8;
+const HANDLE_HIT_PX = 26;
 const MIN_DIM = 4;
-
-const HANDLE_CURSORS: Record<HandleId, string> = {
-  tl: 'nwse-resize', tc: 'ns-resize', tr: 'nesw-resize',
-  ml: 'ew-resize', mr: 'ew-resize',
-  bl: 'nesw-resize', bc: 'ns-resize', br: 'nwse-resize',
-};
 
 function getHandles(crop: CropBox): Record<HandleId, { x: number; y: number }> {
   const { x, y, w, h } = crop;
@@ -69,7 +62,7 @@ function resizeFromHandle(snap: CropBox, handle: HandleId, dx: number, dy: numbe
 }
 
 export default function TrimStep({ state, updateState, goToStep }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const srcCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -80,42 +73,33 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
   const imgH = img?.height ?? 0;
 
   const [crop, setCrop] = useState<CropBox | null>(null);
-  const [zoom, setZoom] = useState(1);
   const [dragState, setDragState] = useState<DragState>({ kind: 'none' });
   const [cursor, setCursor] = useState('default');
   const [showPreview, setShowPreview] = useState(false);
   const [previewData, setPreviewData] = useState<ImageData | null>(null);
 
-  const [containerW, setContainerW] = useState(700);
-  const [containerH, setContainerH] = useState(440);
+  const [box, setBox] = useState({ w: 360, h: 440 });
   useEffect(() => {
-    const el = containerRef.current;
+    const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setContainerW(entry.contentRect.width);
-      setContainerH(entry.contentRect.height);
-    });
+    const ro = new ResizeObserver(([e]) => setBox({ w: e.contentRect.width, h: e.contentRect.height }));
     ro.observe(el);
-    setContainerW(el.clientWidth);
-    setContainerH(el.clientHeight);
+    setBox({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
 
-  // Fit the WHOLE image inside the container — both width and height — so the
-  // trim screen never scrolls. Never up-scale above 1:1.
-  const baseScale = imgW > 0 && imgH > 0
-    ? Math.min((containerW - 8) / imgW, (containerH - 8) / imgH, 1)
+  // The canvas hugs the image: scale the whole image to fit the available
+  // area in BOTH dimensions, never above 1:1. No zoom, no scrolling.
+  const renderScale = imgW > 0 && imgH > 0
+    ? Math.min(box.w / imgW, box.h / imgH, 1)
     : 1;
-  const renderScale = baseScale * zoom;
 
   useEffect(() => {
     if (img) srcCanvasRef.current = imageDataToCanvas(img);
   }, [img]);
 
   useEffect(() => {
-    if (img && !crop) {
-      setCrop({ x: 0, y: 0, w: imgW, h: imgH });
-    }
+    if (img && !crop) setCrop({ x: 0, y: 0, w: imgW, h: imgH });
   }, [img, imgW, imgH]);
 
   const draw = useCallback(() => {
@@ -124,8 +108,8 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
     if (!canvas || !src || !img) return;
 
     const rs = renderScale;
-    const cssW = Math.round(imgW * rs);
-    const cssH = Math.round(imgH * rs);
+    const cssW = Math.max(1, Math.round(imgW * rs));
+    const cssH = Math.max(1, Math.round(imgH * rs));
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     const bufW = Math.round(cssW * dpr);
     const bufH = Math.round(cssH * dpr);
@@ -138,17 +122,14 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
     }
 
     const ctx = canvas.getContext('2d')!;
-    // All drawing below works in CSS-pixel coordinates thanks to this scale —
-    // the higher-density buffer makes everything crisp on retina.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.drawImage(src, 0, 0, cssW, cssH);
 
-    const currentCrop = crop;
-    if (currentCrop) {
-      const { x, y, w, h } = currentCrop;
+    if (crop) {
+      const { x, y, w, h } = crop;
       const sx = x * rs, sy = y * rs, sw = w * rs, sh = h * rs;
 
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -173,10 +154,7 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      const handles = getHandles(currentCrop);
-      Object.values(handles).forEach(({ x: hx, y: hy }) => {
-        // Inset the drawn circle by its radius so handles sitting on the
-        // image edge (x=0, y=0, x=imgW, y=imgH) aren't clipped in half.
+      Object.values(getHandles(crop)).forEach(({ x: hx, y: hy }) => {
         const cx = clamp(hx * rs, HANDLE_RADIUS_PX, cssW - HANDLE_RADIUS_PX);
         const cy = clamp(hy * rs, HANDLE_RADIUS_PX, cssH - HANDLE_RADIUS_PX);
         ctx.beginPath();
@@ -184,7 +162,7 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
         ctx.fillStyle = '#fff';
         ctx.fill();
         ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2.5;
         ctx.stroke();
       });
     }
@@ -204,27 +182,27 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
     };
   }, [renderScale, imgW, imgH]);
 
+  // Nearest handle within the (generous) hit radius — nearest wins so corners
+  // are reliable even when edge handles are close by.
   const hitTestHandle = useCallback((ix: number, iy: number): HandleId | null => {
     if (!crop) return null;
     const hitR = HANDLE_HIT_PX / renderScale;
+    let best: HandleId | null = null;
+    let bestD = hitR;
     for (const [id, pos] of Object.entries(getHandles(crop)) as [HandleId, { x: number; y: number }][]) {
-      if (Math.abs(ix - pos.x) <= hitR && Math.abs(iy - pos.y) <= hitR) return id;
+      const d = Math.hypot(ix - pos.x, iy - pos.y);
+      if (d <= bestD) { bestD = d; best = id; }
     }
-    return null;
+    return best;
   }, [crop, renderScale]);
 
-  const isInsideBody = useCallback((ix: number, iy: number, box: CropBox) => {
-    const hitR = HANDLE_HIT_PX / renderScale;
-    for (const pos of Object.values(getHandles(box))) {
-      if (Math.abs(ix - pos.x) <= hitR && Math.abs(iy - pos.y) <= hitR) return false;
-    }
-    return ix >= box.x && ix <= box.x + box.w && iy >= box.y && iy <= box.y + box.h;
-  }, [renderScale]);
+  const isInsideBody = useCallback((ix: number, iy: number, b: CropBox) => {
+    return ix >= b.x && ix <= b.x + b.w && iy >= b.y && iy <= b.y + b.h;
+  }, []);
 
   const updateCursor = useCallback((ix: number, iy: number) => {
     if (!crop) { setCursor('crosshair'); return; }
-    const h = hitTestHandle(ix, iy);
-    if (h) { setCursor(HANDLE_CURSORS[h]); return; }
+    if (hitTestHandle(ix, iy)) { setCursor('pointer'); return; }
     if (isInsideBody(ix, iy, crop)) { setCursor('move'); return; }
     setCursor('crosshair');
   }, [crop, hitTestHandle, isInsideBody]);
@@ -263,7 +241,7 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* */ }
     setDragState({ kind: 'none' });
   };
 
@@ -281,8 +259,7 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
     if (!crop || !img || crop.w < 2 || crop.h < 2) return;
     const x = Math.round(crop.x), y = Math.round(crop.y);
     const w = Math.max(1, Math.round(crop.w)), h = Math.max(1, Math.round(crop.h));
-    const cropped = cropImageData(img, x, y, w, h);
-    setPreviewData(cropped);
+    setPreviewData(cropImageData(img, x, y, w, h));
     setShowPreview(true);
   };
 
@@ -303,8 +280,7 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
         ctx.fillRect(px, py, sz, sz);
       }
     }
-    const tmp = imageDataToCanvas(previewData);
-    ctx.drawImage(tmp, 0, 0, c.width, c.height);
+    ctx.drawImage(imageDataToCanvas(previewData), 0, 0, c.width, c.height);
   }, [showPreview, previewData]);
 
   const confirmCrop = () => {
@@ -318,77 +294,68 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
     goToStep(3);
   };
 
-  return (
-    <div className="space-y-2.5">
-      {!showPreview ? (
-        <>
-          <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2 flex-wrap">
-            <button onClick={detectBounds} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition">Auto</button>
-            <button onClick={resetToFull} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition">Reset</button>
-            <div className="w-px h-5 bg-gray-600 mx-1" />
-            <button onClick={() => setZoom(z => Math.max(z / 1.5, 0.2))} className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom out"><ZoomOut size={16} /></button>
-            <span className="text-xs text-gray-400 w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom(z => Math.min(z * 1.5, 8))} className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom in"><ZoomIn size={16} /></button>
-            <button onClick={() => setZoom(1)} className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Reset zoom"><RotateCcw size={14} /></button>
-            <div className="flex-1" />
-            {crop && (
-              <span className="text-xs text-gray-500 tabular-nums">
-                {Math.round(crop.w)} × {Math.round(crop.h)} px
-              </span>
-            )}
-          </div>
-
-          <div
-            ref={containerRef}
-            className="rounded-lg border border-gray-700 bg-gray-950 flex items-center justify-center overflow-hidden"
-            style={{ height: 'calc(100dvh - 250px)', minHeight: '260px' }}
-          >
-            <canvas
-              ref={canvasRef}
-              style={{ cursor, display: 'block', touchAction: 'none' }}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
-            />
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              onClick={applyCrop}
-              disabled={!crop || crop.w < 2 || crop.h < 2}
-              className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg font-semibold transition text-sm"
-            >
-              Apply Trim
-            </button>
-            <button onClick={skipCrop} className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg transition text-sm font-semibold">
-              Skip — Use Full Image
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="space-y-3">
-          <div className="bg-gray-800 rounded-lg p-4 space-y-3">
-            <h3 className="font-semibold text-sm text-gray-300">Result — does this look right?</h3>
-            <div className="overflow-auto flex justify-center bg-gray-900 rounded-lg p-4" style={{ maxHeight: '58vh' }}>
-              <canvas ref={previewCanvasRef} className="rounded" style={{ display: 'block' }} />
-            </div>
-            {previewData && (
-              <p className="text-xs text-gray-500 text-center tabular-nums">
-                {previewData.width} × {previewData.height} px
-              </p>
-            )}
-          </div>
-          <div className="flex gap-3">
-            <button onClick={() => setShowPreview(false)} className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition text-sm font-semibold">
-              Re-trim
-            </button>
-            <button onClick={confirmCrop} className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition text-sm">
-              Looks Good — Continue
-            </button>
-          </div>
+  if (showPreview) {
+    return (
+      <div className="h-full flex flex-col gap-2.5">
+        <div className="flex-1 min-h-0 flex items-center justify-center">
+          <canvas ref={previewCanvasRef} className="rounded" style={{ display: 'block' }} />
         </div>
-      )}
+        {previewData && (
+          <p className="text-xs text-gray-500 text-center tabular-nums">
+            {previewData.width} × {previewData.height} px
+          </p>
+        )}
+        <div className="flex gap-2.5 shrink-0">
+          <button onClick={() => setShowPreview(false)} className="flex-1 px-4 py-3.5 bg-gray-700 hover:bg-gray-600 rounded-xl transition font-semibold">
+            Re-trim
+          </button>
+          <button onClick={confirmCrop} className="flex-1 px-4 py-3.5 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold transition">
+            Looks Good
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col gap-2.5">
+      <div className="flex items-center gap-2 shrink-0">
+        <button onClick={detectBounds} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition">Auto-detect</button>
+        <button onClick={resetToFull} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition">Reset</button>
+        <div className="flex-1" />
+        {crop && (
+          <span className="text-xs text-gray-500 tabular-nums">
+            {Math.round(crop.w)} × {Math.round(crop.h)} px
+          </span>
+        )}
+      </div>
+
+      <div ref={wrapRef} className="flex-1 min-h-0 flex items-center justify-center">
+        <canvas
+          ref={canvasRef}
+          style={{ cursor, display: 'block', touchAction: 'none' }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        />
+      </div>
+
+      <div className="space-y-2 shrink-0">
+        <button
+          onClick={applyCrop}
+          disabled={!crop || crop.w < 2 || crop.h < 2}
+          className="w-full px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold transition"
+        >
+          Apply Trim
+        </button>
+        <button
+          onClick={skipCrop}
+          className="w-full py-1.5 text-xs text-gray-500 hover:text-gray-300 transition"
+        >
+          or skip — use the full image
+        </button>
+      </div>
     </div>
   );
 }

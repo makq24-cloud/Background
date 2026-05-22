@@ -141,7 +141,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col">
+    <div className="h-[100dvh] bg-gray-900 text-gray-100 flex flex-col overflow-hidden">
       <header
         className="bg-gray-800 border-b border-gray-700 px-4 sm:px-6"
         style={{
@@ -220,7 +220,7 @@ function App() {
         className="flex-1 overflow-auto"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        <div className="max-w-7xl mx-auto p-3 sm:p-6">
+        <div className="max-w-3xl mx-auto p-3 h-full">
           {state.currentStep === 1 && (
             <ImportStep state={state} updateState={updateState} goToStep={goToStep} />
           )}

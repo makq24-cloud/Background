@@ -310,198 +310,134 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const scaledH = Math.round(previewH * zoom);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-start">
+    <div className="h-full flex flex-col gap-2">
+      {/* Preview background + zoom */}
+      <div className="flex items-center gap-1.5 bg-gray-800 rounded-lg px-2 py-1.5 flex-wrap shrink-0">
+        {bgButtons.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => setBgMode(id)}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition ${
+              bgMode === id
+                ? id === 'original' ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+            }`}
+          >
+            {id === 'checker' && <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: 'repeating-conic-gradient(#888 0% 25%,#555 0% 50%) 0 0/6px 6px' }} />}
+            {id === 'white'   && <span className="w-3 h-3 rounded-sm border border-gray-500 bg-white shrink-0" />}
+            {id === 'black'   && <span className="w-3 h-3 rounded-sm bg-black border border-gray-500 shrink-0" />}
+            {id === 'custom'  && <span className="w-3 h-3 rounded-sm border border-gray-500 shrink-0" style={{ background: customBgColor }} />}
+            {id === 'original' && <span className="w-3 h-3 rounded-sm border border-amber-500 bg-amber-900/40 shrink-0" />}
+            {label}
+          </button>
+        ))}
+        {bgMode === 'custom' && (
+          <input type="color" value={customBgColor} onChange={e => setCustomBgColor(e.target.value)}
+            className="w-7 h-6 rounded cursor-pointer bg-transparent border-0" />
+        )}
+        <div className="flex-1" />
+        <button onClick={() => setZoom(z => Math.max(z / 1.4, 0.1))}
+          className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom out"><ZoomOut size={14} /></button>
+        <span className="text-xs text-gray-400 w-9 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+        <button onClick={() => setZoom(z => Math.min(z * 1.4, 12))}
+          className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom in"><ZoomIn size={14} /></button>
+        <button onClick={fitToScreen}
+          className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Fit to screen"><Maximize2 size={12} /></button>
+      </div>
 
-        <div className="flex-1 flex flex-col gap-2 min-w-0">
-          <div className="flex items-center gap-1.5 bg-gray-800 rounded-lg px-2 py-1.5 flex-wrap shrink-0">
-            <span className="text-xs text-gray-400 font-medium mr-1 hidden sm:inline">Preview:</span>
-            {bgButtons.map(({ id, label }) => (
-              <button
-                key={id}
-                onClick={() => setBgMode(id)}
-                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition ${
-                  bgMode === id
-                    ? id === 'original' ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white'
-                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-                }`}
-              >
-                {id === 'checker' && <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: 'repeating-conic-gradient(#888 0% 25%,#555 0% 50%) 0 0/6px 6px' }} />}
-                {id === 'white'   && <span className="w-3 h-3 rounded-sm border border-gray-500 bg-white shrink-0" />}
-                {id === 'black'   && <span className="w-3 h-3 rounded-sm bg-black border border-gray-500 shrink-0" />}
-                {id === 'custom'  && <span className="w-3 h-3 rounded-sm border border-gray-500 shrink-0" style={{ background: customBgColor }} />}
-                {id === 'original' && <span className="w-3 h-3 rounded-sm border border-amber-500 bg-amber-900/40 shrink-0" />}
-                {label}
-              </button>
-            ))}
-            {bgMode === 'custom' && (
-              <input type="color" value={customBgColor} onChange={e => setCustomBgColor(e.target.value)}
-                className="w-7 h-6 rounded cursor-pointer bg-transparent border-0" />
-            )}
+      {/* Canvas — fills the space between the toolbar and the controls. */}
+      <div ref={canvasWrapRef} className="flex-1 min-h-0 overflow-auto rounded-lg bg-gray-950">
+        <div style={{
+          width: scaledW > 0 ? scaledW : undefined,
+          height: scaledH > 0 ? scaledH : undefined,
+          position: 'relative',
+        }}>
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerLeave={() => eyedropperActive && setHoveredColor(null)}
+            style={{
+              display: 'block',
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              transformOrigin: 'top left',
+              transform: `scale(${zoom})`,
+              imageRendering: zoom > 2 ? 'pixelated' : 'auto',
+              cursor: eyedropperActive ? 'crosshair' : 'default',
+              touchAction: eyedropperActive ? 'none' : 'auto',
+            }}
+          />
+        </div>
+      </div>
 
-            <div className="w-px h-5 bg-gray-600 mx-1" />
+      {isOriginalView && (
+        <div className="bg-amber-900/20 border border-amber-700/40 rounded px-3 py-1 text-xs text-amber-300 shrink-0 text-center">
+          Showing the original image, before removal.
+        </div>
+      )}
 
-            <button onClick={() => setZoom(z => Math.max(z / 1.4, 0.1))}
-              className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom out"><ZoomOut size={14} /></button>
-            <span className="text-xs text-gray-400 w-10 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom(z => Math.min(z * 1.4, 12))}
-              className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom in"><ZoomIn size={14} /></button>
-            <button onClick={fitToScreen}
-              className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Fit to screen"><Maximize2 size={12} /></button>
-          </div>
-
-          {isOriginalView && (
-            <div className="bg-amber-900/20 border border-amber-700/40 rounded px-3 py-1.5 text-xs text-amber-300 shrink-0">
-              Showing original image before any removal
-            </div>
-          )}
-
-          <div ref={canvasWrapRef} className="overflow-auto rounded-lg border border-gray-700 bg-gray-950">
-            <div style={{
-              width: scaledW > 0 ? scaledW : undefined,
-              height: scaledH > 0 ? scaledH : undefined,
-              minHeight: 200,
-              position: 'relative',
-            }}>
-              <canvas
-                ref={canvasRef}
-                onClick={handleCanvasClick}
-                onPointerMove={handleCanvasPointerMove}
-                onPointerLeave={() => eyedropperActive && setHoveredColor(null)}
-                style={{
-                  display: 'block',
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  transformOrigin: 'top left',
-                  transform: `scale(${zoom})`,
-                  imageRendering: zoom > 2 ? 'pixelated' : 'auto',
-                  cursor: eyedropperActive ? 'crosshair' : 'default',
-                  touchAction: eyedropperActive ? 'none' : 'auto',
-                }}
-              />
-            </div>
-          </div>
-
-          {eyedropperActive && (
-            <div className="flex items-center gap-2 bg-gray-800 px-3 py-2 rounded-lg text-sm shrink-0">
-              {hoveredColor ? (
-                <>
-                  <span className="w-5 h-5 rounded border border-gray-500 shrink-0" style={{ background: hoveredColor }} />
-                  <span className="font-mono text-gray-300">{hoveredColor}</span>
-                  <span className="text-gray-500 text-xs">— click to select</span>
-                </>
-              ) : (
-                <span className="text-gray-400 text-xs">Hover over the image to preview color, then click to select</span>
-              )}
-            </div>
-          )}
+      {/* Controls */}
+      <div className="shrink-0 space-y-2">
+        <div className="flex gap-2 items-center">
+          <div className="w-9 h-9 rounded border-2 border-gray-600 shrink-0" style={{ background: targetColor }} />
+          <input
+            type="text"
+            value={targetColor}
+            onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) { setTargetColor(e.target.value); updateState({ alphaUserTuned: true }); } }}
+            className="w-24 px-2 py-2 bg-gray-700 border border-gray-600 rounded font-mono text-xs"
+            maxLength={7}
+          />
+          <button
+            onClick={() => { setEyedropperActive(a => !a); setHoveredColor(null); }}
+            className={`flex-1 flex items-center justify-center gap-1 px-2 py-2 rounded text-xs font-medium transition ${
+              eyedropperActive ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-gray-700 hover:bg-gray-600'
+            }`}
+          >
+            <Pipette size={13} />
+            {eyedropperActive ? 'Tap image…' : 'Pick'}
+          </button>
+          <button
+            onClick={() => autoDetectShirt('dark')}
+            disabled={!!shirtDetecting}
+            className="flex-1 px-2 py-2 bg-gray-900 hover:bg-black border border-gray-600 rounded text-xs font-medium transition disabled:opacity-60"
+          >
+            {shirtDetecting === 'dark' ? '…' : 'Auto Black'}
+          </button>
+          <button
+            onClick={() => autoDetectShirt('light')}
+            disabled={!!shirtDetecting}
+            className="flex-1 px-2 py-2 bg-gray-100 hover:bg-white text-gray-900 border border-gray-300 rounded text-xs font-medium transition disabled:opacity-60"
+          >
+            {shirtDetecting === 'light' ? '…' : 'Auto White'}
+          </button>
         </div>
 
-        <div className="w-full lg:w-60 lg:shrink-0 lg:sticky lg:top-0 lg:self-start space-y-3">
-          <div className="bg-gray-800 p-3 rounded-lg space-y-3">
-
-            <div>
-              <label className="text-sm font-semibold block mb-1.5">Target Color (background to remove)</label>
-              <div className="flex gap-2 items-center">
-                <div className="w-9 h-9 rounded border-2 border-gray-600 shrink-0" style={{ background: targetColor }} />
-                <input
-                  type="text"
-                  value={targetColor}
-                  onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) { setTargetColor(e.target.value); updateState({ alphaUserTuned: true }); } }}
-                  className="flex-1 min-w-0 px-2 py-1.5 bg-gray-700 border border-gray-600 rounded font-mono text-xs"
-                  maxLength={7}
-                />
-                <input
-                  type="color"
-                  value={targetColor.length === 7 ? targetColor : '#ffffff'}
-                  onChange={e => { setTargetColor(e.target.value); updateState({ alphaUserTuned: true }); }}
-                  className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 shrink-0"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-1.5 mt-2">
-                <button
-                  onClick={() => { setEyedropperActive(a => !a); setHoveredColor(null); }}
-                  className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded text-xs font-medium transition ${
-                    eyedropperActive ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-gray-700 hover:bg-gray-600'
-                  }`}
-                >
-                  <Pipette size={12} />
-                  {eyedropperActive ? 'Tap…' : 'Pick'}
-                </button>
-                <button
-                  onClick={() => autoDetectShirt('dark')}
-                  disabled={!!shirtDetecting}
-                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-900 hover:bg-black border border-gray-600 rounded text-xs font-medium transition disabled:opacity-60"
-                >
-                  <span className="w-2.5 h-2.5 rounded-full bg-gray-900 border border-gray-500 shrink-0" />
-                  {shirtDetecting === 'dark' ? '…' : 'Auto Black'}
-                </button>
-                <button
-                  onClick={() => autoDetectShirt('light')}
-                  disabled={!!shirtDetecting}
-                  className="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-100 hover:bg-white text-gray-900 border border-gray-300 rounded text-xs font-medium transition disabled:opacity-60"
-                >
-                  <span className="w-2.5 h-2.5 rounded-full bg-white border border-gray-400 shrink-0" />
-                  {shirtDetecting === 'light' ? '…' : 'Auto White'}
-                </button>
-              </div>
-              <p className="text-xs text-gray-500 mt-1.5 leading-snug">
-                Tap the image to pick a color, or auto-detect the dominant dark/light shade.
-              </p>
-            </div>
-
-            <div className="border-t border-gray-700 pt-2.5">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-semibold">Threshold</label>
-                  <span className="font-mono text-blue-400 text-sm">{sensitivity}</span>
-                </div>
-                <input type="range" min="0" max="100" value={sensitivity}
-                  onChange={e => { setSensitivity(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
-                  className="w-full accent-blue-500" />
-                <p className="text-xs text-gray-500 mt-0.5 leading-snug">How close to target color counts as background.</p>
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-sm font-semibold">Edge Softness</label>
-                <span className="font-mono text-blue-400 text-sm">{softness}</span>
-              </div>
-              <input type="range" min="0" max="100" value={softness}
-                onChange={e => { setSoftness(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
-                className="w-full accent-blue-500" />
-              <p className="text-xs text-gray-500 mt-0.5 leading-snug">Feathered fade at the boundary.</p>
-            </div>
-
-            <div className="pt-2 border-t border-gray-700 space-y-1.5">
-              <p className="text-xs text-gray-500">Quick Presets</p>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button onClick={() => { setTargetColor('#ffffff'); setSensitivity(10); setSoftness(15); updateState({ alphaUserTuned: true }); }}
-                  className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs transition">White BG</button>
-                <button onClick={() => { setTargetColor('#000000'); setSensitivity(10); setSoftness(15); updateState({ alphaUserTuned: true }); }}
-                  className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs transition">Black BG</button>
-                <button onClick={() => { setSensitivity(25); setSoftness(20); updateState({ alphaUserTuned: true }); }}
-                  className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs transition">Aggressive</button>
-                <button onClick={() => { setSensitivity(5); setSoftness(30); updateState({ alphaUserTuned: true }); }}
-                  className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs transition">Gentle</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <button onClick={proceed} disabled={committing}
-              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition text-sm">
-              {committing ? 'Processing full resolution…' : 'Continue to Touch-Up'}
-            </button>
-            <button onClick={skipAlphaRemoval} disabled={committing}
-              className="w-full px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-600 rounded-lg text-xs text-gray-400 transition">
-              Skip — image already has alpha
-            </button>
-          </div>
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-semibold w-24 shrink-0">Threshold</label>
+          <input type="range" min="0" max="100" value={sensitivity}
+            onChange={e => { setSensitivity(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+            className="flex-1 accent-blue-500" />
+          <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{sensitivity}</span>
         </div>
+
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-semibold w-24 shrink-0">Edge Soft</label>
+          <input type="range" min="0" max="100" value={softness}
+            onChange={e => { setSoftness(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+            className="flex-1 accent-blue-500" />
+          <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{softness}</span>
+        </div>
+
+        <button onClick={proceed} disabled={committing}
+          className="w-full px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl font-semibold transition">
+          {committing ? 'Processing full resolution…' : 'Continue'}
+        </button>
+        <button onClick={skipAlphaRemoval} disabled={committing}
+          className="w-full py-1 text-xs text-gray-500 hover:text-gray-300 transition">
+          Skip — image already has alpha
+        </button>
       </div>
     </div>
   );
