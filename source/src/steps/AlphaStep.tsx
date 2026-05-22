@@ -202,9 +202,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     updateState({
       canvasData: cloneImageData(sourceImg),
       prealphaCanvas: sourceImg,
-      currentStep: 5,
+      currentStep: 4,
     });
-    goToStep(5);
+    goToStep(4);
   };
 
   const proceed = async () => {
@@ -223,9 +223,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
         prealphaCanvas: prealpha,
         alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
         alphaUserTuned: true,
-        currentStep: 5,
+        currentStep: 4,
       });
-      goToStep(5);
+      goToStep(4);
     } catch (err) {
       console.error('Alpha worker failed:', err);
 
@@ -261,9 +261,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
           prealphaCanvas: sourceImg,
           alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
           alphaUserTuned: true,
-          currentStep: 5,
+          currentStep: 4,
         });
-        goToStep(5);
+        goToStep(4);
       } catch (e) {
         console.error('Main-thread fallback also failed:', e);
         alert('Processing failed. Please try again — if it keeps happening, reload the page.');

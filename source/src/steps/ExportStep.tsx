@@ -184,7 +184,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
       }
 
       const cleanFilename = filename.replace(/\.[^.]+$/, '').slice(0, 80) || 'design';
-      const platenPrefix = state.platenName ? `${state.platenName}_` : '';
+      const platenPrefix = state.platenName ? `${state.platenName.replace(/[^a-zA-Z0-9]/g, "_")}_` : "";
       const baseName = `${platenPrefix}${cleanFilename}`;
 
       let finalName = `${baseName}.png`;
@@ -298,6 +298,13 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
             </div>
           </div>
 
+          <button
+            onClick={() => goToStep(6)}
+            className="w-full px-4 py-2.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm font-medium text-gray-300 transition"
+          >
+            Touch-Up & Dot Cleanup
+          </button>
+
           {/* File info + filename */}
           <div className="bg-gray-800 p-4 rounded-lg space-y-3">
             <div>
@@ -310,7 +317,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm"
               />
               <p className="text-xs text-gray-400 mt-1">
-                Final: {state.platenName ? `${state.platenName}_` : ''}{filename || 'design'}.png
+                Final: {state.platenName ? state.platenName.replace(/[^a-zA-Z0-9]/g, '_') + '_' : ''}{filename || 'design'}.png
               </p>
             </div>
 

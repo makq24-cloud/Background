@@ -26,7 +26,15 @@ export type AppState = {
   currentImageIndex: number;
 };
 
-const STEP_NAMES = ['Import', 'Trim', 'Platen', 'Background', 'Touch-Up', 'Export'];
+// The forced flow is four steps. Trim and Touch-Up are on-demand detours
+// reached by a button — most images never need them.
+//   1 Import · 2 Platen · 3 Background · 4 Export · 5 Trim · 6 Touch-Up
+const MAIN_STEPS = ['Import', 'Platen', 'Background', 'Export'];
+const STEP_LABEL: Record<number, string> = {
+  1: 'Import', 2: 'Platen', 3: 'Background', 4: 'Export', 5: 'Trim', 6: 'Touch-Up',
+};
+// Which of the 4 progress dots is lit for a given step (detours map to their host).
+const DOT_INDEX: Record<number, number> = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 1, 6: 3 };
 
 const INITIAL_STATE: AppState = {
   currentStep: 1,
@@ -110,9 +118,10 @@ function App() {
   };
 
   const goBack = () => {
-    if (state.currentStep > 1) {
-      goToStep(state.currentStep - 1);
-    }
+    // Trim returns to Platen; Touch-Up returns to Export; otherwise step back.
+    if (state.currentStep === 5) { goToStep(2); return; }
+    if (state.currentStep === 6) { goToStep(4); return; }
+    if (state.currentStep > 1) goToStep(state.currentStep - 1);
   };
 
   const updateState = (updates: Partial<AppState>) => {
@@ -165,10 +174,9 @@ function App() {
           )}
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {STEP_NAMES.map((_, i) => {
-              const idx = i + 1;
-              const active = idx === state.currentStep;
-              const done = idx < state.currentStep;
+            {MAIN_STEPS.map((_, i) => {
+              const active = i === DOT_INDEX[state.currentStep];
+              const done = i < DOT_INDEX[state.currentStep];
               return (
                 <div
                   key={i}
@@ -185,7 +193,7 @@ function App() {
           </div>
 
           <div className="flex-1 text-center font-semibold truncate">
-            {STEP_NAMES[state.currentStep - 1]}
+            {STEP_LABEL[state.currentStep]}
           </div>
 
           {state.queuedImages.length > 0 ? (
@@ -225,19 +233,19 @@ function App() {
             <ImportStep state={state} updateState={updateState} goToStep={goToStep} />
           )}
           {state.currentStep === 2 && (
-            <CropStep state={state} updateState={updateState} goToStep={goToStep} />
-          )}
-          {state.currentStep === 3 && (
             <PlatenStep state={state} updateState={updateState} goToStep={goToStep} />
           )}
-          {state.currentStep === 4 && (
+          {state.currentStep === 3 && (
             <AlphaStep state={state} updateState={updateState} goToStep={goToStep} />
           )}
+          {state.currentStep === 4 && (
+            <ExportStep state={state} updateState={updateState} goToStep={goToStep} />
+          )}
           {state.currentStep === 5 && (
-            <RestoreStep state={state} updateState={updateState} goToStep={goToStep} />
+            <CropStep state={state} updateState={updateState} goToStep={goToStep} />
           )}
           {state.currentStep === 6 && (
-            <ExportStep state={state} updateState={updateState} goToStep={goToStep} />
+            <RestoreStep state={state} updateState={updateState} goToStep={goToStep} />
           )}
         </div>
       </main>

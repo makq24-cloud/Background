@@ -22,7 +22,7 @@ export default function ImportStep({ state, updateState, goToStep }: Props) {
       const imageData = canvasToImageData(drawImageToCanvas(img));
       updateState({
         sourceImage: imageData,
-        croppedImage: null,
+        croppedImage: imageData,
         canvasData: null,
         prealphaCanvas: null,
         queuedImages: queue,

@@ -405,8 +405,8 @@ export default function RestoreStep({ state, updateState, goToStep }: Props) {
   const proceed = () => {
     const data = workingRef.current ?? workingData;
     if (data) {
-      updateState({ canvasData: data, currentStep: 6 });
-      goToStep(6);
+      updateState({ canvasData: data, currentStep: 4 });
+      goToStep(4);
     }
   };
 

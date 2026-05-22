@@ -116,21 +116,25 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     else placeFill(d);
   };
 
-  // First entry: default to Neato Jumbo, Fit placement (top-centered).
+  // First entry: reuse the platen carried from a previous image if there is
+  // one, otherwise default to Neato Jumbo. Fit placement (top-centered).
   useEffect(() => {
     if (didInit.current || !src) return;
     didInit.current = true;
-    const t = TEMPLATES[DEFAULT_TEMPLATE];
+    const carried = TEMPLATES.find(t => t.name === state.platenName);
+    const t = carried ?? TEMPLATES[DEFAULT_TEMPLATE];
     const d = { width: t.width, height: t.height };
     setPlaten(d);
     setSelectedTemplate(t.name);
     placeFit(d);
-  }, [src, placeFit]);
+  }, [src, state.platenName, placeFit]);
 
   const selectTemplate = (t: typeof TEMPLATES[0]) => {
     const d = { width: t.width, height: t.height };
     setPlaten(d);
     setSelectedTemplate(t.name);
+    // Persist immediately so the choice carries to the next batch image.
+    updateState({ platenDimensions: d, platenName: t.name });
     if (preset === 'actual') placeActual(d);
     else if (preset === 'fill') placeFill(d);
     else placeFit(d);
@@ -325,11 +329,11 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     ctx.drawImage(sc, pos.x, pos.y, srcW * scale, srcH * scale);
     updateState({
       platenDimensions: platen,
-      platenName: selectedTemplate.replace(/[^a-zA-Z0-9]/g, '_'),
+      platenName: selectedTemplate,
       canvasData: ctx.getImageData(0, 0, out.width, out.height),
-      currentStep: 4,
+      currentStep: 3,
     });
-    goToStep(4);
+    goToStep(3);
   };
 
   const PRESETS: { id: Exclude<Preset, 'custom'>; label: string; sub: string }[] = [
@@ -401,13 +405,21 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
         ))}
       </div>
 
-      <button
-        onClick={proceed}
-        disabled={!platen}
-        className="shrink-0 w-full px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl font-semibold transition"
-      >
-        Continue
-      </button>
+      <div className="flex gap-2 shrink-0">
+        <button
+          onClick={() => goToStep(5)}
+          className="px-4 py-3.5 bg-gray-800 hover:bg-gray-700 rounded-xl font-semibold transition text-gray-300"
+        >
+          Trim
+        </button>
+        <button
+          onClick={proceed}
+          disabled={!platen}
+          className="flex-1 px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl font-semibold transition"
+        >
+          Continue
+        </button>
+      </div>
     </div>
   );
 }

@@ -285,13 +285,13 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
 
   const confirmCrop = () => {
     if (!previewData) return;
-    updateState({ croppedImage: previewData, currentStep: 3 });
-    goToStep(3);
+    updateState({ croppedImage: previewData, currentStep: 2 });
+    goToStep(2);
   };
 
   const skipCrop = () => {
-    updateState({ croppedImage: img, currentStep: 3 });
-    goToStep(3);
+    updateState({ croppedImage: img, currentStep: 2 });
+    goToStep(2);
   };
 
   if (showPreview) {
