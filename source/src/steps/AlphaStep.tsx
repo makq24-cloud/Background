@@ -4,7 +4,7 @@ import { AppState } from '../App';
 import { applyTrueColorToAlpha, downscalePreview, detectDominantShade, detectBackgroundShade } from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
 import { imageDataToCanvas, cloneImageData } from '../utils/imageUtils';
-import { analyzeSpecks, speckIds, removeSpecksInPlace } from '../utils/dotCleanup';
+import { analyzeSpecks, removeSpecksInPlace } from '../utils/dotCleanup';
 
 type Props = {
   state: AppState;
@@ -26,6 +26,12 @@ function rgbToHex(r: number, g: number, b: number): string {
 }
 
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+
+// Loose-fragment survey bounds (preview px²). SURVEY_MIN drops sub-visible
+// 1–2px anti-alias crumbs; SURVEY_MAX matches the Dot Cleanup slider's max
+// reach — anything bigger isn't a "dot", it's a background-threshold problem.
+const SURVEY_MIN = 3;
+const SURVEY_MAX = 600;
 
 export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -80,32 +86,48 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     setProcessedPreview(processed);
   }, [previewSource, sensitivity, softness, targetColor]);
 
-  // Connected-component analysis — only computed while dot cleanup is on.
+  // Connected-component analysis. Runs whenever the preview is ready — NOT
+  // gated on the slider — so the screen can passively tell the user whether
+  // the transparent areas are clean, with no extra tap to find out.
   const speckAnalysis = useMemo(
-    () => (dotCleanup > 0 && processedPreview ? analyzeSpecks(processedPreview) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [processedPreview, dotCleanup > 0]
+    () => (processedPreview ? analyzeSpecks(processedPreview) : null),
+    [processedPreview]
   );
 
-  // Red overlay marking exactly which specks the slider will erase, plus a
-  // count so the user can see it's catching dots without eating the artwork.
-  const speckOverlay = useMemo<{ overlay: ImageData | null; count: number }>(() => {
-    if (!speckAnalysis || dotMaxArea <= 0) return { overlay: null, count: 0 };
-    const ids = speckIds(speckAnalysis, dotMaxArea);
-    if (ids.length === 0) return { overlay: null, count: 0 };
-    const { width, height, labels, sizes } = speckAnalysis;
-    const isSpeck = new Uint8Array(sizes.length);
-    for (const id of ids) isSpeck[id] = 1;
+  // Two-tier overlay, available as soon as the preview is ready:
+  //  · every loose fragment in dot-size range gets a FAINT amber marker —
+  //    the passive "is the transparent space clean?" survey.
+  //  · the subset the slider will actually erase flips to BRIGHT red.
+  // looseCount = total surveyed fragments; removeCount = what will be erased.
+  const dotSurvey = useMemo<{
+    overlay: ImageData | null; looseCount: number; removeCount: number;
+  }>(() => {
+    if (!speckAnalysis) return { overlay: null, looseCount: 0, removeCount: 0 };
+    const { width, height, labels, sizes, largestId } = speckAnalysis;
+    // tier per component: 0 = ignore, 1 = surveyed (faint), 2 = will erase (red)
+    const tier = new Uint8Array(sizes.length);
+    let looseCount = 0, removeCount = 0;
+    for (let i = 0; i < sizes.length; i++) {
+      if (i === largestId) continue; // the main artwork is never a fragment
+      const s = sizes[i];
+      if (s < SURVEY_MIN || s > SURVEY_MAX) continue;
+      looseCount++;
+      if (dotMaxArea > 0 && s <= dotMaxArea) { tier[i] = 2; removeCount++; }
+      else tier[i] = 1;
+    }
+    if (looseCount === 0) return { overlay: null, looseCount: 0, removeCount: 0 };
     const ov = new ImageData(width, height);
     const d = ov.data;
     for (let p = 0; p < labels.length; p++) {
       const lbl = labels[p];
-      if (lbl >= 0 && isSpeck[lbl]) {
-        const o = p << 2;
-        d[o] = 255; d[o + 1] = 30; d[o + 2] = 30; d[o + 3] = 210;
-      }
+      if (lbl < 0) continue;
+      const t = tier[lbl];
+      if (t === 0) continue;
+      const o = p << 2;
+      if (t === 2) { d[o] = 255; d[o + 1] = 30;  d[o + 2] = 30; d[o + 3] = 210; }
+      else         { d[o] = 255; d[o + 1] = 190; d[o + 2] = 50; d[o + 3] = 90;  }
     }
-    return { overlay: ov, count: ids.length };
+    return { overlay: ov, looseCount, removeCount };
   }, [speckAnalysis, dotMaxArea]);
 
   const drawCanvas = useCallback(() => {
@@ -146,10 +168,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     const tmp = imageDataToCanvas(activePreview);
     ctx.drawImage(tmp, 0, 0);
 
-    // Dot cleanup: tint the specks the slider will erase bright red, so the
-    // user can confirm it's catching stray dots and not biting the artwork.
-    if (dotCleanup > 0 && speckOverlay.overlay && bgMode !== 'original' && bgMode !== 'mask') {
-      ctx.drawImage(imageDataToCanvas(speckOverlay.overlay), 0, 0);
+    // Dot survey: faint amber on every loose fragment, bright red on the ones
+    // the slider will erase. Drawn whenever anything is loose — so the user
+    // sees the state of the image without ever touching the slider.
+    if (dotSurvey.overlay && bgMode !== 'original' && bgMode !== 'mask') {
+      ctx.drawImage(imageDataToCanvas(dotSurvey.overlay), 0, 0);
     }
 
     // Mask preview: overlay a red tint proportional to alpha loss so the user
@@ -174,7 +197,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       const overlayCanvas = imageDataToCanvas(overlay);
       ctx.drawImage(overlayCanvas, 0, 0);
     }
-  }, [activePreview, bgMode, customBgColor, zoom, originalPreview, processedPreview, dotCleanup, speckOverlay]);
+  }, [activePreview, bgMode, customBgColor, zoom, originalPreview, processedPreview, dotCleanup, dotSurvey]);
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
@@ -499,8 +522,16 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
           <input type="range" min="0" max="100" value={dotCleanup}
             onChange={e => setDotCleanup(parseInt(e.target.value))}
             className="flex-1 accent-red-500" />
-          <span className="font-mono text-red-400 text-sm w-12 text-right tabular-nums">
-            {dotCleanup > 0 ? `${speckOverlay.count} ●` : '—'}
+          <span className="font-mono text-sm w-20 text-right tabular-nums">
+            {!speckAnalysis ? (
+              <span className="text-gray-500">…</span>
+            ) : dotSurvey.looseCount === 0 ? (
+              <span className="text-green-400">Clean</span>
+            ) : dotCleanup === 0 ? (
+              <span className="text-amber-400">{dotSurvey.looseCount} ●</span>
+            ) : (
+              <span className="text-red-400">{dotSurvey.removeCount}/{dotSurvey.looseCount} ●</span>
+            )}
           </span>
         </div>
 
