@@ -4,7 +4,7 @@ import { AppState } from '../App';
 import { applyTrueColorToAlpha, downscalePreview, detectDominantShade, detectBackgroundShade } from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
 import { imageDataToCanvas, cloneImageData } from '../utils/imageUtils';
-import { analyzeSpecks, removeSpecksInPlace } from '../utils/dotCleanup';
+import { analyzeSpecks, removeSpecksInPlace, isResidueComponent } from '../utils/dotCleanup';
 
 type Props = {
   state: AppState;
@@ -104,6 +104,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   }>(() => {
     if (!speckAnalysis) return { overlay: null, looseCount: 0, removeCount: 0 };
     const { width, height, labels, sizes, largestId } = speckAnalysis;
+    const target = hexToRgb(targetColor);
     // tier per component: 0 = ignore, 1 = surveyed (faint), 2 = will erase (red)
     const tier = new Uint8Array(sizes.length);
     let looseCount = 0, removeCount = 0;
@@ -111,6 +112,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       if (i === largestId) continue; // the main artwork is never a fragment
       const s = sizes[i];
       if (s < SURVEY_MIN || s > SURVEY_MAX) continue;
+      // Only background residue counts — a saturated intentional element
+      // (gold bead, pink star) is never surveyed or erased, at any slider.
+      if (!isResidueComponent(speckAnalysis, i, target)) continue;
       looseCount++;
       if (dotMaxArea > 0 && s <= dotMaxArea) { tier[i] = 2; removeCount++; }
       else tier[i] = 1;
@@ -128,7 +132,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       else         { d[o] = 255; d[o + 1] = 190; d[o + 2] = 50; d[o + 3] = 90;  }
     }
     return { overlay: ov, looseCount, removeCount };
-  }, [speckAnalysis, dotMaxArea]);
+  }, [speckAnalysis, dotMaxArea, targetColor]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -288,7 +292,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     if (dotCleanup <= 0 || !previewSource) return img;
     const s = previewSource.width / img.width;
     const fullMax = Math.round(dotMaxArea / (s * s));
-    removeSpecksInPlace(img, analyzeSpecks(img), fullMax);
+    removeSpecksInPlace(img, analyzeSpecks(img), fullMax, hexToRgb(targetColor));
     return img;
   };
 
