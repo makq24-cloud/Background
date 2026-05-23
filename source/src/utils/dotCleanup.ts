@@ -100,3 +100,19 @@ export function removeSpecks(img: ImageData, a: SpeckAnalysis, maxArea: number):
   }
   return out;
 }
+
+// Same as removeSpecks but mutates the image in place — no full-image copy.
+// Use when the caller owns the buffer (e.g. a fresh worker result), to avoid
+// a second ~W*H*4 allocation on large full-resolution images.
+export function removeSpecksInPlace(img: ImageData, a: SpeckAnalysis, maxArea: number): void {
+  const remove = speckIds(a, maxArea);
+  if (remove.length === 0) return;
+  const isSpeck = new Uint8Array(a.sizes.length);
+  for (const id of remove) isSpeck[id] = 1;
+  const d = img.data;
+  const labels = a.labels;
+  for (let p = 0; p < labels.length; p++) {
+    const lbl = labels[p];
+    if (lbl >= 0 && isSpeck[lbl]) d[(p << 2) + 3] = 0;
+  }
+}

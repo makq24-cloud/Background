@@ -4,7 +4,7 @@ import { AppState } from '../App';
 import { applyTrueColorToAlpha, downscalePreview, detectDominantShade, detectBackgroundShade } from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
 import { imageDataToCanvas, cloneImageData } from '../utils/imageUtils';
-import { analyzeSpecks, speckIds, removeSpecks } from '../utils/dotCleanup';
+import { analyzeSpecks, speckIds, removeSpecksInPlace } from '../utils/dotCleanup';
 
 type Props = {
   state: AppState;
@@ -88,12 +88,14 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     if (!speckAnalysis || dotMaxArea <= 0) return { overlay: null, count: 0 };
     const ids = speckIds(speckAnalysis, dotMaxArea);
     if (ids.length === 0) return { overlay: null, count: 0 };
-    const idSet = new Set(ids);
-    const { width, height, labels } = speckAnalysis;
+    const { width, height, labels, sizes } = speckAnalysis;
+    const isSpeck = new Uint8Array(sizes.length);
+    for (const id of ids) isSpeck[id] = 1;
     const ov = new ImageData(width, height);
     const d = ov.data;
     for (let p = 0; p < labels.length; p++) {
-      if (idSet.has(labels[p])) {
+      const lbl = labels[p];
+      if (lbl >= 0 && isSpeck[lbl]) {
         const o = p << 2;
         d[o] = 255; d[o + 1] = 30; d[o + 2] = 30; d[o + 3] = 210;
       }
@@ -207,7 +209,10 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     if (!sourceImg) return;
     setShirtDetecting(mode);
     setTimeout(() => {
-      const detected = detectDominantShade(sourceImg, mode);
+      // Detect on the raw design — its border is the real background color.
+      // canvasData's border is mostly transparent platen, which is unreliable.
+      const detectSrc = state.croppedImage ?? sourceImg;
+      const detected = detectDominantShade(detectSrc, mode);
       if (detected) {
         setTargetColor(rgbToHex(...detected));
         setSensitivity(10);
@@ -217,7 +222,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       }
       setShirtDetecting(null);
     }, 0);
-  }, [sourceImg]);
+  }, [sourceImg, state.croppedImage]);
 
   // Auto-detect the dominant background shade on first entry so the user
   // sees a meaningful preview immediately. Skipped on later batch images
@@ -230,7 +235,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     if (!state.alphaUserTuned) {
       // Detect whether the background is light or dark first, instead of
       // always assuming dark — picks the right target on a white-bg image.
-      autoDetectShirt(detectBackgroundShade(sourceImg));
+      autoDetectShirt(detectBackgroundShade(state.croppedImage ?? sourceImg));
     }
   }, [sourceImg, autoDetected, autoDetectShirt, state.alphaUserTuned]);
 
@@ -249,11 +254,14 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
 
   // Apply the dot cleanup to a full-resolution result. The slider's area is
   // in preview pixels, so scale it up by the preview/full ratio (area ∝ s²).
+  // Mutates in place — the caller owns the buffer — to avoid a second large
+  // allocation on 20+ MP images.
   const withDotCleanup = (img: ImageData): ImageData => {
     if (dotCleanup <= 0 || !previewSource) return img;
     const s = previewSource.width / img.width;
     const fullMax = Math.round(dotMaxArea / (s * s));
-    return removeSpecks(img, analyzeSpecks(img), fullMax);
+    removeSpecksInPlace(img, analyzeSpecks(img), fullMax);
+    return img;
   };
 
   const proceed = async () => {
