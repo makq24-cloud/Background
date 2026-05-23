@@ -125,3 +125,68 @@ export function cloneImageData(imageData: ImageData): ImageData {
   cloned.data.set(imageData.data);
   return cloned;
 }
+
+// Detects and crops a thin, near-uniform light-or-dark band hugging an edge —
+// the residue AI upscalers leave behind, which the colour-to-alpha step then
+// misses because it is a slightly different shade than the real background.
+// Deliberately conservative: only trims a band that is thin (<=2% of the
+// dimension), internally uniform, a consistent colour distinct from whatever
+// sits just inside it, and overall near-white or near-black.
+export function autoTrimEdges(img: ImageData): ImageData {
+  const { width: W, height: H, data } = img;
+  const UNIFORM = 20; // max channel spread tolerated within one line
+  const DRIFT = 24;   // max colour drift allowed across the band
+  const capH = Math.max(2, Math.floor(H * 0.02));
+  const capW = Math.max(2, Math.floor(W * 0.02));
+
+  // Mean colour + spread of the opaque pixels along one row or column.
+  const lineStat = (along: 'row' | 'col', idx: number) => {
+    let rs = 0, gs = 0, bs = 0, n = 0;
+    let rmin = 255, rmax = 0, gmin = 255, gmax = 0, bmin = 255, bmax = 0;
+    const len = along === 'row' ? W : H;
+    for (let k = 0; k < len; k++) {
+      const x = along === 'row' ? k : idx;
+      const y = along === 'row' ? idx : k;
+      const p = (y * W + x) * 4;
+      if (data[p + 3] < 200) continue;
+      const r = data[p], g = data[p + 1], b = data[p + 2];
+      rs += r; gs += g; bs += b; n++;
+      if (r < rmin) rmin = r; if (r > rmax) rmax = r;
+      if (g < gmin) gmin = g; if (g > gmax) gmax = g;
+      if (b < bmin) bmin = b; if (b > bmax) bmax = b;
+    }
+    if (n < len * 0.6) return null; // mostly transparent — not an artifact band
+    return {
+      r: rs / n, g: gs / n, b: bs / n,
+      spread: Math.max(rmax - rmin, gmax - gmin, bmax - bmin),
+    };
+  };
+
+  const bandLen = (along: 'row' | 'col', fromStart: boolean, cap: number) => {
+    const total = along === 'row' ? H : W;
+    let count = 0, br = 0, bg = 0, bb = 0;
+    for (let step = 0; step <= cap; step++) {
+      const idx = fromStart ? step : total - 1 - step;
+      const s = lineStat(along, idx);
+      if (!s || s.spread > UNIFORM) break;
+      if (count === 0) { br = s.r; bg = s.g; bb = s.b; }
+      else if (Math.abs(s.r - br) + Math.abs(s.g - bg) + Math.abs(s.b - bb) > DRIFT) break;
+      count++;
+    }
+    if (count === 0 || count > cap) return 0; // none, or band overflows the cap
+    const lo = Math.min(br, bg, bb), hi = Math.max(br, bg, bb);
+    if (lo < 190 && hi > 70) return 0; // not near-white and not near-black — leave it
+    return count;
+  };
+
+  const top = bandLen('row', true, capH);
+  const bottom = bandLen('row', false, capH);
+  const left = bandLen('col', true, capW);
+  const right = bandLen('col', false, capW);
+
+  if (!top && !bottom && !left && !right) return img;
+  const nw = W - left - right;
+  const nh = H - top - bottom;
+  if (nw < W * 0.5 || nh < H * 0.5) return img; // safety — never trim that aggressively
+  return cropImageData(img, left, top, nw, nh);
+}

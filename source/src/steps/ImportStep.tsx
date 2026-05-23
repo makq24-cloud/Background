@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Upload } from 'lucide-react';
 import { AppState } from '../App';
-import { loadImageFile, drawImageToCanvas, canvasToImageData } from '../utils/imageUtils';
+import { loadImageFile, drawImageToCanvas, canvasToImageData, autoTrimEdges } from '../utils/imageUtils';
 
 type Props = {
   state: AppState;
@@ -19,7 +19,9 @@ export default function ImportStep({ state, updateState, goToStep }: Props) {
     try {
       setLoading(true);
       const img = await loadImageFile(file);
-      const imageData = canvasToImageData(drawImageToCanvas(img));
+      // Strip any thin upscaler/edge residue before it reaches the platen —
+      // a no-op for clean images.
+      const imageData = autoTrimEdges(canvasToImageData(drawImageToCanvas(img)));
       updateState({
         sourceImage: imageData,
         croppedImage: imageData,

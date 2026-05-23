@@ -329,7 +329,12 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
     ctx.clearRect(0, 0, out.width, out.height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(sc, pos.x, pos.y, srcW * scale, srcH * scale);
+    // Integer-align so the placed image has crisp edges — no anti-aliased fringe.
+    ctx.drawImage(
+      sc,
+      Math.round(pos.x), Math.round(pos.y),
+      Math.round(srcW * scale), Math.round(srcH * scale),
+    );
     updateState({
       platenDimensions: platen,
       platenName: selectedTemplate,
