@@ -51,7 +51,12 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   // gets erased. Quadratic so the low end stays fine-grained.
   const dotMaxArea = Math.round((dotCleanup / 100) ** 2 * 600);
 
-  const sourceImg = state.canvasData;
+  // Always process from the untouched platen composite. prealphaCanvas holds
+  // it after a prior run; on first entry it's null so we fall back to
+  // canvasData (which IS the fresh composite at that point). Without this,
+  // re-entering from Export would re-remove the background from an already
+  // transparent image and erode the artwork.
+  const sourceImg = state.prealphaCanvas ?? state.canvasData;
   const isOriginalView = bgMode === 'original';
   const isMaskView = bgMode === 'mask';
   // In mask mode the original image stays visible underneath the red tint

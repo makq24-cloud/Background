@@ -339,6 +339,9 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
       platenDimensions: platen,
       platenName: selectedTemplate,
       canvasData: ctx.getImageData(0, 0, out.width, out.height),
+      // Drop any prealpha buffer from a previous run — this new composite
+      // must be what the Background step reprocesses, not the old layout.
+      prealphaCanvas: null,
       currentStep: 3,
     });
     goToStep(3);
