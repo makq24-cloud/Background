@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Download, Loader } from 'lucide-react';
+import UPNG from 'upng-js';
 import { AppState } from '../App';
 import { imageDataToCanvas, get2dContext } from '../utils/imageUtils';
+
+const formatBytes = (n: number) =>
+  n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 type Props = {
   state: AppState;
@@ -14,6 +18,10 @@ type ReviewBg = 'black' | 'white' | 'checker' | 'original' | 'mask';
 export default function ExportStep({ state, updateState, goToStep }: Props) {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  // 'compressed' = upng-js k-means quantization (TinyPNG-style, visually
+  // identical, much smaller). 'lossless' = exact pixels via the browser encoder.
+  const [pngMode, setPngMode] = useState<'compressed' | 'lossless'>('compressed');
+  const [lastExport, setLastExport] = useState<{ size: number; saved: number } | null>(null);
   const queuedName = state.queuedImages[state.currentImageIndex]?.name?.replace(/\.[^.]+$/, '');
   const [filename, setFilename] = useState(queuedName || 'design');
   const usedNamesRef = useRef<Set<string>>(new Set());
@@ -173,15 +181,39 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
     setExportProgress(30);
 
     try {
+      // Always produce the lossless PNG via the browser encoder first.
       const canvas = imageDataToCanvas(state.canvasData);
-      setExportProgress(70);
-
-      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
-      if (!blob) {
+      const losslessBlob = await new Promise<Blob | null>((res) =>
+        canvas.toBlob(res, 'image/png'),
+      );
+      if (!losslessBlob) {
         alert('Failed to create image');
         setExporting(false);
         return;
       }
+      setExportProgress(45);
+
+      let blob: Blob = losslessBlob;
+      if (pngMode === 'compressed') {
+        // Let the progress bar paint before the (synchronous) quantize.
+        await new Promise((r) => setTimeout(r, 30));
+        try {
+          // upng-js k-means colour quantization (TinyPNG-style). It wins big
+          // on upscaled art with thousands of near-duplicate colours, but can
+          // *bloat* gradient-heavy images — so keep it only if it's smaller.
+          const cd = state.canvasData;
+          const rgba = cd.data.buffer.slice(
+            cd.data.byteOffset,
+            cd.data.byteOffset + cd.data.byteLength,
+          );
+          const png = UPNG.encode([rgba], cd.width, cd.height, 256);
+          const quant = new Blob([png], { type: 'image/png' });
+          if (quant.size < losslessBlob.size) blob = quant;
+        } catch (e) {
+          console.error('Quantize failed — keeping lossless PNG:', e);
+        }
+      }
+      setExportProgress(70);
 
       const cleanFilename = filename.replace(/\.[^.]+$/, '').slice(0, 80) || 'design';
       const platenPrefix = state.platenName ? `${state.platenName.replace(/[^a-zA-Z0-9]/g, "_")}_` : "";
@@ -194,6 +226,10 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
         finalName = `${baseName}_${n}.png`;
       }
       usedNamesRef.current.add(finalName);
+      setLastExport({
+        size: blob.size,
+        saved: 1 - blob.size / losslessBlob.size,
+      });
 
       const file = new File([blob], finalName, { type: 'image/png' });
       const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
@@ -314,8 +350,47 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
               </p>
             </div>
 
+            <div>
+              <label className="text-sm font-semibold block mb-1.5">PNG compression</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setPngMode('compressed')}
+                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold text-left transition ${
+                    pngMode === 'compressed'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Compressed
+                  <span className="block text-[11px] font-normal opacity-75">Much smaller, looks identical</span>
+                </button>
+                <button
+                  onClick={() => setPngMode('lossless')}
+                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold text-left transition ${
+                    pngMode === 'lossless'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Lossless
+                  <span className="block text-[11px] font-normal opacity-75">Every pixel exact</span>
+                </button>
+              </div>
+            </div>
+
             <div className="bg-gray-900 p-3 rounded border border-gray-700 text-xs text-gray-300 space-y-0.5 tabular-nums">
-              <p>{state.canvasData.width} × {state.canvasData.height} px · 300 DPI · PNG (RGBA)</p>
+              <p>
+                {state.canvasData.width} × {state.canvasData.height} px · 300 DPI · PNG
+                {pngMode === 'lossless' ? ' (lossless RGBA)' : ' (compressed)'}
+              </p>
+              {lastExport && (
+                <p className="text-green-400">
+                  Last export · {formatBytes(lastExport.size)}
+                  {lastExport.saved > 0.03
+                    ? ` · ${Math.round(lastExport.saved * 100)}% smaller`
+                    : ' · already optimal'}
+                </p>
+              )}
             </div>
 
             {exporting && (
