@@ -100,56 +100,113 @@ export function analyzeSpecks(img: ImageData): SpeckAnalysis {
   return { labels, sizes, spots, colors, width, height, largestId };
 }
 
-// Component ids that count as removable specks: small enough AND classified
-// as background residue (close to the removed colour, or faint). A saturated
-// intentional element — gold bead, pink star — is never returned, whatever
-// the size limit. The single largest component is also always excluded.
+// ---- Isolation: how far a fragment floats from the real artwork ----------
+// A junk speck sits alone in open background; a meaningful detail sits right
+// against the design. Distance-to-artwork tells them apart — size cannot.
+
+// Fragment size bounds (px², preview-space defaults; scaled up for full-res).
+export const SURVEY_MIN = 3;     // below this is sub-visible anti-alias dust
+export const FRAGMENT_MAX = 600; // above this it is not a "dot" at all
+export const CONTENT_BIG = 700;  // components this big anchor "the artwork"
+
+// Two-pass chamfer distance transform: for every pixel, the distance to the
+// nearest set pixel of `mask`. Cheap and accurate enough for isolation tests.
+function distanceTransform(mask: Uint8Array, w: number, h: number): Float32Array {
+  const BIG = 1e9;
+  const dt = new Float32Array(w * h);
+  for (let i = 0; i < dt.length; i++) dt[i] = mask[i] ? 0 : BIG;
+  const D = 1, DD = Math.SQRT2;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      let v = dt[i];
+      if (x > 0)              v = Math.min(v, dt[i - 1] + D);
+      if (y > 0)              v = Math.min(v, dt[i - w] + D);
+      if (x > 0 && y > 0)     v = Math.min(v, dt[i - w - 1] + DD);
+      if (x < w - 1 && y > 0) v = Math.min(v, dt[i - w + 1] + DD);
+      dt[i] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      let v = dt[i];
+      if (x < w - 1)              v = Math.min(v, dt[i + 1] + D);
+      if (y < h - 1)              v = Math.min(v, dt[i + w] + D);
+      if (x < w - 1 && y < h - 1) v = Math.min(v, dt[i + w + 1] + DD);
+      if (x > 0 && y < h - 1)     v = Math.min(v, dt[i + w - 1] + DD);
+      dt[i] = v;
+    }
+  }
+  return dt;
+}
+
+// Per-component isolation: distance from a component's nearest pixel to the
+// nearest piece of substantial artwork. The artwork anchors (big components
+// plus the largest) report 0.
+export type Isolation = Float32Array;
+
+export function computeIsolation(a: SpeckAnalysis, contentMinSize: number): Isolation {
+  const { width, height, labels, sizes, largestId } = a;
+  const isContent = (id: number) => id === largestId || sizes[id] >= contentMinSize;
+  const mask = new Uint8Array(width * height);
+  for (let p = 0; p < labels.length; p++) {
+    const l = labels[p];
+    if (l >= 0 && isContent(l)) mask[p] = 1;
+  }
+  const dt = distanceTransform(mask, width, height);
+  const iso = new Float32Array(sizes.length).fill(Infinity);
+  for (let i = 0; i < sizes.length; i++) if (isContent(i)) iso[i] = 0;
+  for (let p = 0; p < labels.length; p++) {
+    const l = labels[p];
+    if (l < 0 || isContent(l)) continue;
+    const d = dt[p];
+    if (d < iso[l]) iso[l] = d;
+  }
+  return iso;
+}
+
+// Ids to erase: a genuine floating speck — within fragment size range, not the
+// artwork, and at least `isolationMin` px from any substantial design content
+// (i.e. truly sitting in open background, not hugging the art).
 export function speckIds(
-  a: SpeckAnalysis,
-  maxArea: number,
-  target: [number, number, number],
+  a: SpeckAnalysis, iso: Isolation, isolationMin: number, fragmentMax: number,
 ): number[] {
   const ids: number[] = [];
   for (let i = 0; i < a.sizes.length; i++) {
-    if (i === a.largestId || a.sizes[i] > maxArea) continue;
-    if (isResidueComponent(a, i, target)) ids.push(i);
+    if (i === a.largestId) continue;
+    const s = a.sizes[i];
+    if (s < SURVEY_MIN || s > fragmentMax) continue;
+    if (iso[i] >= isolationMin) ids.push(i);
   }
   return ids;
 }
 
-// A copy of the image with every speck component erased (alpha -> 0).
-export function removeSpecks(
-  img: ImageData, a: SpeckAnalysis, maxArea: number, target: [number, number, number],
-): ImageData {
-  const out = new ImageData(new Uint8ClampedArray(img.data), img.width, img.height);
-  const remove = speckIds(a, maxArea, target);
-  if (remove.length === 0) return out;
-  const isSpeck = new Uint8Array(a.sizes.length);
-  for (const id of remove) isSpeck[id] = 1;
-
-  const d = out.data;
-  const labels = a.labels;
-  for (let p = 0; p < labels.length; p++) {
-    const lbl = labels[p];
-    if (lbl >= 0 && isSpeck[lbl]) d[(p << 2) + 3] = 0;
-  }
-  return out;
-}
-
-// Same as removeSpecks but mutates the image in place — no full-image copy.
-// Use when the caller owns the buffer (e.g. a fresh worker result), to avoid
-// a second ~W*H*4 allocation on large full-resolution images.
-export function removeSpecksInPlace(
-  img: ImageData, a: SpeckAnalysis, maxArea: number, target: [number, number, number],
-): void {
-  const remove = speckIds(a, maxArea, target);
+function eraseIds(img: ImageData, a: SpeckAnalysis, remove: number[]): void {
   if (remove.length === 0) return;
   const isSpeck = new Uint8Array(a.sizes.length);
   for (const id of remove) isSpeck[id] = 1;
-  const d = img.data;
-  const labels = a.labels;
+  const d = img.data, labels = a.labels;
   for (let p = 0; p < labels.length; p++) {
     const lbl = labels[p];
     if (lbl >= 0 && isSpeck[lbl]) d[(p << 2) + 3] = 0;
   }
+}
+
+// A copy of the image with the isolated specks erased (alpha -> 0).
+export function removeSpecks(
+  img: ImageData, a: SpeckAnalysis, iso: Isolation,
+  isolationMin: number, fragmentMax: number,
+): ImageData {
+  const out = new ImageData(new Uint8ClampedArray(img.data), img.width, img.height);
+  eraseIds(out, a, speckIds(a, iso, isolationMin, fragmentMax));
+  return out;
+}
+
+// In-place variant — avoids a second full-image allocation on large images.
+export function removeSpecksInPlace(
+  img: ImageData, a: SpeckAnalysis, iso: Isolation,
+  isolationMin: number, fragmentMax: number,
+): void {
+  eraseIds(img, a, speckIds(a, iso, isolationMin, fragmentMax));
 }

@@ -4,7 +4,10 @@ import { AppState } from '../App';
 import { applyTrueColorToAlpha, downscalePreview, detectDominantShade, detectBackgroundShade } from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
 import { imageDataToCanvas, cloneImageData } from '../utils/imageUtils';
-import { analyzeSpecks, removeSpecksInPlace, isResidueComponent } from '../utils/dotCleanup';
+import {
+  analyzeSpecks, removeSpecksInPlace, computeIsolation,
+  SURVEY_MIN, FRAGMENT_MAX, CONTENT_BIG,
+} from '../utils/dotCleanup';
 
 type Props = {
   state: AppState;
@@ -27,11 +30,9 @@ function rgbToHex(r: number, g: number, b: number): string {
 
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
 
-// Loose-fragment survey bounds (preview px²). SURVEY_MIN drops sub-visible
-// 1–2px anti-alias crumbs; SURVEY_MAX matches the Dot Cleanup slider's max
-// reach — anything bigger isn't a "dot", it's a background-threshold problem.
-const SURVEY_MIN = 3;
-const SURVEY_MAX = 600;
+// A fragment counts as a "loose floater" worth surveying once it sits at least
+// this far (preview px) from the artwork — close-to-art detail is left alone.
+const SURVEY_ISO = 14;
 
 export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,7 +56,10 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
 
   // Dot cleanup: the slider sets the largest speck (in preview pixels) that
   // gets erased. Quadratic so the low end stays fine-grained.
-  const dotMaxArea = Math.round((dotCleanup / 100) ** 2 * 600);
+  // Dot Cleanup slider now controls how far IN from the artwork the cleanup
+  // reaches: higher = more aggressive = sweeps floaters closer to the design.
+  // 0 disables it (isolationMin = Infinity -> nothing erased).
+  const isolationMin = dotCleanup > 0 ? clamp(150 - dotCleanup * 1.44, 6, 200) : Infinity;
 
   // Always process from the untouched platen composite. prealphaCanvas holds
   // it after a prior run; on first entry it's null so we fall back to
@@ -94,30 +98,35 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     [processedPreview]
   );
 
+  // Per-component distance to the real artwork — the signal that separates a
+  // junk floater (alone in open background) from detail hugging the design.
+  const isolation = useMemo(
+    () => (speckAnalysis ? computeIsolation(speckAnalysis, CONTENT_BIG) : null),
+    [speckAnalysis]
+  );
+
   // Two-tier overlay, available as soon as the preview is ready:
-  //  · every loose fragment in dot-size range gets a FAINT amber marker —
-  //    the passive "is the transparent space clean?" survey.
-  //  · the subset the slider will actually erase flips to BRIGHT red.
-  // looseCount = total surveyed fragments; removeCount = what will be erased.
+  //  · every loose floater (sitting out in open background) gets a FAINT
+  //    amber marker — the passive "is the open space clean?" survey.
+  //  · the subset the slider reaches flips to BRIGHT red.
+  // Fragments hugging the artwork are never marked or erased — at any slider.
   const dotSurvey = useMemo<{
     overlay: ImageData | null; looseCount: number; removeCount: number;
   }>(() => {
-    if (!speckAnalysis) return { overlay: null, looseCount: 0, removeCount: 0 };
+    if (!speckAnalysis || !isolation) return { overlay: null, looseCount: 0, removeCount: 0 };
     const { width, height, labels, sizes, largestId } = speckAnalysis;
-    const target = hexToRgb(targetColor);
     // tier per component: 0 = ignore, 1 = surveyed (faint), 2 = will erase (red)
     const tier = new Uint8Array(sizes.length);
     let looseCount = 0, removeCount = 0;
     for (let i = 0; i < sizes.length; i++) {
-      if (i === largestId) continue; // the main artwork is never a fragment
+      if (i === largestId) continue;
       const s = sizes[i];
-      if (s < SURVEY_MIN || s > SURVEY_MAX) continue;
-      // Only background residue counts — a saturated intentional element
-      // (gold bead, pink star) is never surveyed or erased, at any slider.
-      if (!isResidueComponent(speckAnalysis, i, target)) continue;
-      looseCount++;
-      if (dotMaxArea > 0 && s <= dotMaxArea) { tier[i] = 2; removeCount++; }
-      else tier[i] = 1;
+      if (s < SURVEY_MIN || s > FRAGMENT_MAX) continue;
+      const iso = isolation[i];
+      const willRemove = iso >= isolationMin;       // within the slider's reach
+      const isFloater = iso >= SURVEY_ISO;          // sitting in open background
+      if (willRemove) { tier[i] = 2; removeCount++; looseCount++; }
+      else if (isFloater) { tier[i] = 1; looseCount++; }
     }
     if (looseCount === 0) return { overlay: null, looseCount: 0, removeCount: 0 };
     const ov = new ImageData(width, height);
@@ -132,7 +141,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       else         { d[o] = 255; d[o + 1] = 190; d[o + 2] = 50; d[o + 3] = 90;  }
     }
     return { overlay: ov, looseCount, removeCount };
-  }, [speckAnalysis, dotMaxArea, targetColor]);
+  }, [speckAnalysis, isolation, isolationMin]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -284,15 +293,16 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     goToStep(4);
   };
 
-  // Apply the dot cleanup to a full-resolution result. The slider's area is
-  // in preview pixels, so scale it up by the preview/full ratio (area ∝ s²).
-  // Mutates in place — the caller owns the buffer — to avoid a second large
-  // allocation on 20+ MP images.
+  // Apply the dot cleanup to a full-resolution result. Thresholds are tuned
+  // in preview space, so scale them up by the preview/full ratio: distances
+  // scale by 1/s, areas by 1/s². Mutates in place — the caller owns the
+  // buffer — to avoid a second large allocation on 20+ MP images.
   const withDotCleanup = (img: ImageData): ImageData => {
     if (dotCleanup <= 0 || !previewSource) return img;
     const s = previewSource.width / img.width;
-    const fullMax = Math.round(dotMaxArea / (s * s));
-    removeSpecksInPlace(img, analyzeSpecks(img), fullMax, hexToRgb(targetColor));
+    const fullA = analyzeSpecks(img);
+    const fullIso = computeIsolation(fullA, CONTENT_BIG / (s * s));
+    removeSpecksInPlace(img, fullA, fullIso, isolationMin / s, FRAGMENT_MAX / (s * s));
     return img;
   };
 
