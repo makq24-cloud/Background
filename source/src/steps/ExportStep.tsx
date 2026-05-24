@@ -3,6 +3,7 @@ import { Download, Loader } from 'lucide-react';
 import UPNG from 'upng-js';
 import { AppState } from '../App';
 import { imageDataToCanvas, get2dContext } from '../utils/imageUtils';
+import { encodeDitheredPNG } from '../utils/ditherQuantize';
 
 const formatBytes = (n: number) =>
   n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -21,7 +22,10 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
   // 'lossless' = exact pixels (default — never posterizes). 'compressed' =
   // upng-js 256-colour quantization: much smaller, but bands smooth gradients
   // (painted faces, soft shading) — only safe for flat / vector-style art.
-  const [pngMode, setPngMode] = useState<'compressed' | 'lossless'>('lossless');
+  // 'dithered' = Floyd–Steinberg quantization: spreads the rounding error so
+  // smooth gradients become fine grain instead of flat bands — photo-safe,
+  // smaller than lossless, a bit larger than compressed.
+  const [pngMode, setPngMode] = useState<'compressed' | 'lossless' | 'dithered'>('lossless');
   const [lastExport, setLastExport] = useState<{ size: number; saved: number } | null>(null);
   const queuedName = state.queuedImages[state.currentImageIndex]?.name?.replace(/\.[^.]+$/, '');
   const [filename, setFilename] = useState(queuedName || 'design');
@@ -213,6 +217,26 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
         } catch (e) {
           console.error('Quantize failed — keeping lossless PNG:', e);
         }
+      } else if (pngMode === 'dithered') {
+        await new Promise((r) => setTimeout(r, 30));
+        try {
+          // Floyd–Steinberg error diffusion onto a 255-colour palette. Trades
+          // the flat posterized bands of plain quantization for fine grain,
+          // so painted faces / soft shading survive. Bigger than 'compressed'
+          // (grain compresses worse) but still well under lossless — keep it
+          // only if it actually came out smaller.
+          const cd = state.canvasData;
+          const { buffer } = await encodeDitheredPNG(
+            cd.data,
+            cd.width,
+            cd.height,
+            (frac) => setExportProgress(45 + Math.round(frac * 22)),
+          );
+          const dithered = new Blob([buffer], { type: 'image/png' });
+          if (dithered.size < losslessBlob.size) blob = dithered;
+        } catch (e) {
+          console.error('Dither failed — keeping lossless PNG:', e);
+        }
       }
       setExportProgress(70);
 
@@ -353,18 +377,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
 
             <div>
               <label className="text-sm font-semibold block mb-1.5">PNG compression</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setPngMode('compressed')}
-                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold text-left transition ${
-                    pngMode === 'compressed'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  Compressed
-                  <span className="block text-[11px] font-normal opacity-75">Smaller — flat art only, bands faces</span>
-                </button>
+              <div className="grid grid-cols-1 gap-2">
                 <button
                   onClick={() => setPngMode('lossless')}
                   className={`px-3 py-2.5 rounded-lg text-sm font-semibold text-left transition ${
@@ -374,7 +387,29 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
                   }`}
                 >
                   Lossless
-                  <span className="block text-[11px] font-normal opacity-75">Exact — safe for everything</span>
+                  <span className="block text-[11px] font-normal opacity-75">Exact pixels — safe for everything, largest file</span>
+                </button>
+                <button
+                  onClick={() => setPngMode('dithered')}
+                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold text-left transition ${
+                    pngMode === 'dithered'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Dithered
+                  <span className="block text-[11px] font-normal opacity-75">Smaller, no banding — adds fine grain; safe for faces &amp; gradients</span>
+                </button>
+                <button
+                  onClick={() => setPngMode('compressed')}
+                  className={`px-3 py-2.5 rounded-lg text-sm font-semibold text-left transition ${
+                    pngMode === 'compressed'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Compressed
+                  <span className="block text-[11px] font-normal opacity-75">Smallest — flat / vector art only, bands smooth faces</span>
                 </button>
               </div>
             </div>
@@ -382,7 +417,11 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
             <div className="bg-gray-900 p-3 rounded border border-gray-700 text-xs text-gray-300 space-y-0.5 tabular-nums">
               <p>
                 {state.canvasData.width} × {state.canvasData.height} px · 300 DPI · PNG
-                {pngMode === 'lossless' ? ' (lossless RGBA)' : ' (compressed)'}
+                {pngMode === 'lossless'
+                  ? ' (lossless RGBA)'
+                  : pngMode === 'dithered'
+                    ? ' (dithered, fine grain)'
+                    : ' (compressed)'}
               </p>
               {lastExport && (
                 <p className="text-green-400">
