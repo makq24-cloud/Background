@@ -126,33 +126,37 @@ export function applyTrueColorToAlpha(
 export function applyColorToAlphaInPlace(
   data: Uint8ClampedArray,
   tR: number, tG: number, tB: number,
-  threshold: number,
+  transparency: number, // 0-100: coverage at/below which a pixel goes fully clear
+  opacity: number,      // 0-100: coverage at/above which a pixel stays fully solid
 ): void {
-  const forceDist = (threshold / 100) * 100;
-  const forceSq = forceDist * forceDist;
+  const tT = transparency / 100;
+  const oT = opacity / 100;
+  // Width of the graded zone. Guarded so opacity <= transparency degrades to
+  // a near-hard cutoff instead of dividing by zero.
+  const den = Math.max(oT - tT, 0.001);
   for (let i = 0; i < data.length; i += 4) {
     const a0 = data[i + 3];
     if (a0 === 0) continue;
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const dr = r - tR, dg = g - tG, db = b - tB;
-
-    if (dr * dr + dg * dg + db * db <= forceSq) {
-      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
-      continue;
-    }
-    // Per-channel coverage: how far this channel is from the target,
+    // Per-channel coverage: how far each channel sits from the target,
     // normalised by the room available toward white (or black).
     const ar = dr > 0 ? dr / (255 - tR) : dr < 0 ? -dr / tR : 0;
     const ag = dg > 0 ? dg / (255 - tG) : dg < 0 ? -dg / tG : 0;
     const ab = db > 0 ? db / (255 - tB) : db < 0 ? -db / tB : 0;
-    let alpha = ar > ag ? (ar > ab ? ar : ab) : (ag > ab ? ag : ab);
+    const cov = ar > ag ? (ar > ab ? ar : ab) : (ag > ab ? ag : ab);
 
+    // GIMP/Photopea two-threshold remap: below the transparency threshold
+    // -> fully clear; above the opacity threshold -> fully solid; graded
+    // between. This is what stops solid artwork from washing out.
+    let alpha = (cov - tT) / den;
     if (alpha <= 0) {
       data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
       continue;
     }
     if (alpha > 1) alpha = 1;
-    // Decontaminate: recover the true (unmixed) colour.
+    // Decontaminate (unmix the target colour back out). At alpha === 1 this
+    // returns the pixel exactly unchanged, so solid artwork is left intact.
     data[i]     = clampByte(tR + dr / alpha);
     data[i + 1] = clampByte(tG + dg / alpha);
     data[i + 2] = clampByte(tB + db / alpha);
@@ -161,11 +165,12 @@ export function applyColorToAlphaInPlace(
 }
 
 export function applyColorToAlpha(
-  imageData: ImageData, tR: number, tG: number, tB: number, threshold: number,
+  imageData: ImageData, tR: number, tG: number, tB: number,
+  transparency: number, opacity: number,
 ): ImageData {
   const result = new ImageData(imageData.width, imageData.height);
   result.data.set(imageData.data);
-  applyColorToAlphaInPlace(result.data, tR, tG, tB, threshold);
+  applyColorToAlphaInPlace(result.data, tR, tG, tB, transparency, opacity);
   return result;
 }
 

@@ -12,6 +12,7 @@ export type AlphaRequest = {
   b: number;
   threshold: number;
   softness: number;
+  opacity: number;
   mode: AlphaMode;
 };
 
@@ -20,7 +21,7 @@ export type AlphaResponse =
   | { id: number; ok: false; error: string };
 
 self.onmessage = (e: MessageEvent<AlphaRequest>) => {
-  const { id, sourceBuf, width, height, r, g, b, threshold, softness, mode } = e.data;
+  const { id, sourceBuf, width, height, r, g, b, threshold, softness, opacity, mode } = e.data;
 
   try {
     // Allocate a fresh result buffer of the same size and seed it with the
@@ -30,7 +31,7 @@ self.onmessage = (e: MessageEvent<AlphaRequest>) => {
     resultView.set(new Uint8ClampedArray(sourceBuf));
 
     if (mode === 'c2a') {
-      applyColorToAlphaInPlace(resultView, r, g, b, threshold);
+      applyColorToAlphaInPlace(resultView, r, g, b, threshold, opacity);
     } else {
       applyTrueColorToAlphaInPlace(resultView, r, g, b, threshold, softness);
     }

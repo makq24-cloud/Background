@@ -47,6 +47,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   // 'solid' = bounded edge feather (opaque interiors). 'c2a' = true Photopea
   // color-to-alpha: graduated transparency everywhere + decontamination.
   const [colorMode, setColorMode] = useState<'solid' | 'c2a'>('solid');
+  // Color-to-alpha: how much artwork to hold fully solid (higher = less
+  // wash-out). Passed to the engine inverted as the opacity threshold.
+  const [keepSolid, setKeepSolid] = useState(60);
   const [targetColor, setTargetColor] = useState(rgbToHex(...state.alphaSettings.targetColor));
   const [bgMode, setBgMode] = useState<BgMode>('checker');
   const [customBgColor, setCustomBgColor] = useState('#888888');
@@ -93,10 +96,10 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     if (!previewSource) return;
     const [r, g, b] = hexToRgb(targetColor);
     const processed = colorMode === 'c2a'
-      ? applyColorToAlpha(previewSource, r, g, b, sensitivity)
+      ? applyColorToAlpha(previewSource, r, g, b, sensitivity, 100 - keepSolid)
       : applyTrueColorToAlpha(previewSource, r, g, b, sensitivity, softness);
     setProcessedPreview(processed);
-  }, [previewSource, sensitivity, softness, targetColor, colorMode]);
+  }, [previewSource, sensitivity, softness, targetColor, colorMode, keepSolid]);
 
   // Connected-component analysis. Runs whenever the preview is ready — NOT
   // gated on the slider — so the screen can passively tell the user whether
@@ -324,7 +327,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // here for the duration. The worker hands BOTH buffers back, so we
       // rebuild fresh ImageDatas for canvasData (result) and prealphaCanvas
       // (source, untouched bytes) without a separate clone allocation.
-      const { prealpha, result } = await runAlpha(sourceImg, r, g, b, sensitivity, softness, colorMode);
+      const { prealpha, result } = await runAlpha(sourceImg, r, g, b, sensitivity, softness, colorMode, 100 - keepSolid);
       updateState({
         canvasData: withDotCleanup(result),
         prealphaCanvas: prealpha,
@@ -363,7 +366,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // as prealpha since applyTrueColorToAlpha does not mutate input.
       try {
         const final = colorMode === 'c2a'
-          ? applyColorToAlpha(sourceImg, r, g, b, sensitivity)
+          ? applyColorToAlpha(sourceImg, r, g, b, sensitivity, 100 - keepSolid)
           : applyTrueColorToAlpha(sourceImg, r, g, b, sensitivity, softness);
         updateState({
           canvasData: withDotCleanup(final),
@@ -547,7 +550,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
         </div>
 
         <div className="flex items-center gap-3">
-          <label className="text-sm font-semibold w-24 shrink-0">Threshold</label>
+          <label className="text-sm font-semibold w-24 shrink-0">{colorMode === 'c2a' ? 'Transparency' : 'Threshold'}</label>
           <input type="range" min="0" max="100" value={sensitivity}
             onChange={e => { setSensitivity(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
             className="flex-1 accent-blue-500" />
@@ -561,6 +564,16 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
               onChange={e => { setSoftness(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
               className="flex-1 accent-blue-500" />
             <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{softness}</span>
+          </div>
+        )}
+
+        {colorMode === 'c2a' && (
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-semibold w-24 shrink-0">Keep Solid</label>
+            <input type="range" min="0" max="100" value={keepSolid}
+              onChange={e => { setKeepSolid(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+              className="flex-1 accent-blue-500" />
+            <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{keepSolid}</span>
           </div>
         )}
 
