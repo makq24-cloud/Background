@@ -18,9 +18,10 @@ type ReviewBg = 'black' | 'white' | 'checker' | 'original' | 'mask';
 export default function ExportStep({ state, updateState, goToStep }: Props) {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
-  // 'compressed' = upng-js k-means quantization (TinyPNG-style, visually
-  // identical, much smaller). 'lossless' = exact pixels via the browser encoder.
-  const [pngMode, setPngMode] = useState<'compressed' | 'lossless'>('compressed');
+  // 'lossless' = exact pixels (default — never posterizes). 'compressed' =
+  // upng-js 256-colour quantization: much smaller, but bands smooth gradients
+  // (painted faces, soft shading) — only safe for flat / vector-style art.
+  const [pngMode, setPngMode] = useState<'compressed' | 'lossless'>('lossless');
   const [lastExport, setLastExport] = useState<{ size: number; saved: number } | null>(null);
   const queuedName = state.queuedImages[state.currentImageIndex]?.name?.replace(/\.[^.]+$/, '');
   const [filename, setFilename] = useState(queuedName || 'design');
@@ -362,7 +363,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
                   }`}
                 >
                   Compressed
-                  <span className="block text-[11px] font-normal opacity-75">Much smaller, looks identical</span>
+                  <span className="block text-[11px] font-normal opacity-75">Smaller — flat art only, bands faces</span>
                 </button>
                 <button
                   onClick={() => setPngMode('lossless')}
@@ -373,7 +374,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
                   }`}
                 >
                   Lossless
-                  <span className="block text-[11px] font-normal opacity-75">Every pixel exact</span>
+                  <span className="block text-[11px] font-normal opacity-75">Exact — safe for everything</span>
                 </button>
               </div>
             </div>
