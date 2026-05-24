@@ -1,4 +1,6 @@
-import { applyTrueColorToAlphaInPlace } from './alphaEngine';
+import { applyTrueColorToAlphaInPlace, applyColorToAlphaInPlace } from './alphaEngine';
+
+export type AlphaMode = 'solid' | 'c2a';
 
 export type AlphaRequest = {
   id: number;
@@ -10,6 +12,7 @@ export type AlphaRequest = {
   b: number;
   threshold: number;
   softness: number;
+  mode: AlphaMode;
 };
 
 export type AlphaResponse =
@@ -17,7 +20,7 @@ export type AlphaResponse =
   | { id: number; ok: false; error: string };
 
 self.onmessage = (e: MessageEvent<AlphaRequest>) => {
-  const { id, sourceBuf, width, height, r, g, b, threshold, softness } = e.data;
+  const { id, sourceBuf, width, height, r, g, b, threshold, softness, mode } = e.data;
 
   try {
     // Allocate a fresh result buffer of the same size and seed it with the
@@ -26,7 +29,11 @@ self.onmessage = (e: MessageEvent<AlphaRequest>) => {
     const resultView = new Uint8ClampedArray(resultBuf);
     resultView.set(new Uint8ClampedArray(sourceBuf));
 
-    applyTrueColorToAlphaInPlace(resultView, r, g, b, threshold, softness);
+    if (mode === 'c2a') {
+      applyColorToAlphaInPlace(resultView, r, g, b, threshold);
+    } else {
+      applyTrueColorToAlphaInPlace(resultView, r, g, b, threshold, softness);
+    }
 
     // Transfer BOTH buffers back so the main thread can rebuild the original
     // source (now needed as prealphaCanvas) without a clone, plus the result.

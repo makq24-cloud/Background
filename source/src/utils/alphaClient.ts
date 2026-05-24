@@ -1,4 +1,4 @@
-import type { AlphaRequest, AlphaResponse } from './alphaWorker';
+import type { AlphaRequest, AlphaResponse, AlphaMode } from './alphaWorker';
 
 let workerInstance: Worker | null = null;
 let nextId = 1;
@@ -61,6 +61,7 @@ export function runAlpha(
   b: number,
   threshold: number,
   softness: number,
+  mode: AlphaMode,
 ): Promise<{ prealpha: ImageData; result: ImageData }> {
   return new Promise((resolve, reject) => {
     const id = nextId++;
@@ -71,7 +72,7 @@ export function runAlpha(
       sourceBuf: source.data.buffer,
       width: source.width,
       height: source.height,
-      r, g, b, threshold, softness,
+      r, g, b, threshold, softness, mode,
     };
 
     try {

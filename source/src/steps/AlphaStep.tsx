@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ZoomIn, ZoomOut, Pipette, Maximize2 } from 'lucide-react';
 import { AppState } from '../App';
-import { applyTrueColorToAlpha, downscalePreview, detectDominantShade, detectBackgroundShade } from '../utils/alphaEngine';
+import {
+  applyTrueColorToAlpha, applyColorToAlpha,
+  downscalePreview, detectDominantShade, detectBackgroundShade,
+} from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
 import { imageDataToCanvas, cloneImageData } from '../utils/imageUtils';
 import {
@@ -41,6 +44,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
 
   const [sensitivity, setSensitivity] = useState(state.alphaSettings.alphaBase || 10);
   const [softness, setSoftness] = useState(state.alphaSettings.alphaContrast || 15);
+  // 'solid' = bounded edge feather (opaque interiors). 'c2a' = true Photopea
+  // color-to-alpha: graduated transparency everywhere + decontamination.
+  const [colorMode, setColorMode] = useState<'solid' | 'c2a'>('solid');
   const [targetColor, setTargetColor] = useState(rgbToHex(...state.alphaSettings.targetColor));
   const [bgMode, setBgMode] = useState<BgMode>('checker');
   const [customBgColor, setCustomBgColor] = useState('#888888');
@@ -86,9 +92,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   useEffect(() => {
     if (!previewSource) return;
     const [r, g, b] = hexToRgb(targetColor);
-    const processed = applyTrueColorToAlpha(previewSource, r, g, b, sensitivity, softness);
+    const processed = colorMode === 'c2a'
+      ? applyColorToAlpha(previewSource, r, g, b, sensitivity)
+      : applyTrueColorToAlpha(previewSource, r, g, b, sensitivity, softness);
     setProcessedPreview(processed);
-  }, [previewSource, sensitivity, softness, targetColor]);
+  }, [previewSource, sensitivity, softness, targetColor, colorMode]);
 
   // Connected-component analysis. Runs whenever the preview is ready — NOT
   // gated on the slider — so the screen can passively tell the user whether
@@ -316,7 +324,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // here for the duration. The worker hands BOTH buffers back, so we
       // rebuild fresh ImageDatas for canvasData (result) and prealphaCanvas
       // (source, untouched bytes) without a separate clone allocation.
-      const { prealpha, result } = await runAlpha(sourceImg, r, g, b, sensitivity, softness);
+      const { prealpha, result } = await runAlpha(sourceImg, r, g, b, sensitivity, softness, colorMode);
       updateState({
         canvasData: withDotCleanup(result),
         prealphaCanvas: prealpha,
@@ -354,7 +362,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // still valid — safe to run on main thread. Use sourceImg directly
       // as prealpha since applyTrueColorToAlpha does not mutate input.
       try {
-        const final = applyTrueColorToAlpha(sourceImg, r, g, b, sensitivity, softness);
+        const final = colorMode === 'c2a'
+          ? applyColorToAlpha(sourceImg, r, g, b, sensitivity)
+          : applyTrueColorToAlpha(sourceImg, r, g, b, sensitivity, softness);
         updateState({
           canvasData: withDotCleanup(final),
           prealphaCanvas: sourceImg,
@@ -515,6 +525,27 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
           </button>
         </div>
 
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setColorMode('solid'); updateState({ alphaUserTuned: true }); }}
+            className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition ${
+              colorMode === 'solid' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+            }`}
+          >
+            Solid cut
+            <span className="block text-[11px] font-normal opacity-75">Crisp opaque interior</span>
+          </button>
+          <button
+            onClick={() => { setColorMode('c2a'); updateState({ alphaUserTuned: true }); }}
+            className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition ${
+              colorMode === 'c2a' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+            }`}
+          >
+            Color to Alpha
+            <span className="block text-[11px] font-normal opacity-75">Graded ink, no halo</span>
+          </button>
+        </div>
+
         <div className="flex items-center gap-3">
           <label className="text-sm font-semibold w-24 shrink-0">Threshold</label>
           <input type="range" min="0" max="100" value={sensitivity}
@@ -523,13 +554,15 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
           <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{sensitivity}</span>
         </div>
 
-        <div className="flex items-center gap-3">
-          <label className="text-sm font-semibold w-24 shrink-0">Edge Soft</label>
-          <input type="range" min="0" max="100" value={softness}
-            onChange={e => { setSoftness(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
-            className="flex-1 accent-blue-500" />
-          <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{softness}</span>
-        </div>
+        {colorMode === 'solid' && (
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-semibold w-24 shrink-0">Edge Soft</label>
+            <input type="range" min="0" max="100" value={softness}
+              onChange={e => { setSoftness(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+              className="flex-1 accent-blue-500" />
+            <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{softness}</span>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <label className="text-sm font-semibold w-24 shrink-0">Dot Cleanup</label>

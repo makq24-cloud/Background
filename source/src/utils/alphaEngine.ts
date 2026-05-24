@@ -109,6 +109,66 @@ export function applyTrueColorToAlpha(
   return result;
 }
 
+/**
+ * True color-to-alpha — the GIMP / Photopea algorithm.
+ *
+ * Unlike the bounded version above (which keeps interiors fully opaque and
+ * only feathers a narrow edge band), this is GLOBAL: every pixel's opacity
+ * becomes a function of how far its colour sits from the target. Pixels at
+ * the target colour go fully transparent; pixels far from it stay solid;
+ * everything between gets graduated partial alpha. Each pixel's colour is
+ * then decontaminated (the target colour is unmixed back out), so there is
+ * no grey/dark matte fringe left ringing the artwork.
+ *
+ * threshold (0-100): a small inner zone forced fully transparent, for when
+ *                    the background isn't perfectly uniform. 0 = pure C2A.
+ */
+export function applyColorToAlphaInPlace(
+  data: Uint8ClampedArray,
+  tR: number, tG: number, tB: number,
+  threshold: number,
+): void {
+  const forceDist = (threshold / 100) * 100;
+  const forceSq = forceDist * forceDist;
+  for (let i = 0; i < data.length; i += 4) {
+    const a0 = data[i + 3];
+    if (a0 === 0) continue;
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const dr = r - tR, dg = g - tG, db = b - tB;
+
+    if (dr * dr + dg * dg + db * db <= forceSq) {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+      continue;
+    }
+    // Per-channel coverage: how far this channel is from the target,
+    // normalised by the room available toward white (or black).
+    const ar = dr > 0 ? dr / (255 - tR) : dr < 0 ? -dr / tR : 0;
+    const ag = dg > 0 ? dg / (255 - tG) : dg < 0 ? -dg / tG : 0;
+    const ab = db > 0 ? db / (255 - tB) : db < 0 ? -db / tB : 0;
+    let alpha = ar > ag ? (ar > ab ? ar : ab) : (ag > ab ? ag : ab);
+
+    if (alpha <= 0) {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+      continue;
+    }
+    if (alpha > 1) alpha = 1;
+    // Decontaminate: recover the true (unmixed) colour.
+    data[i]     = clampByte(tR + dr / alpha);
+    data[i + 1] = clampByte(tG + dg / alpha);
+    data[i + 2] = clampByte(tB + db / alpha);
+    data[i + 3] = Math.round(alpha * a0);
+  }
+}
+
+export function applyColorToAlpha(
+  imageData: ImageData, tR: number, tG: number, tB: number, threshold: number,
+): ImageData {
+  const result = new ImageData(imageData.width, imageData.height);
+  result.data.set(imageData.data);
+  applyColorToAlphaInPlace(result.data, tR, tG, tB, threshold);
+  return result;
+}
+
 export function downscalePreview(
   imageData: ImageData,
   maxSize: number = 500
