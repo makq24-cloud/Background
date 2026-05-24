@@ -112,55 +112,79 @@ export function applyTrueColorToAlpha(
 /**
  * True color-to-alpha — the GIMP / Photopea algorithm.
  *
- * Unlike the bounded version above (which keeps interiors fully opaque and
- * only feathers a narrow edge band), this is GLOBAL: every pixel's opacity
- * becomes a function of how far its colour sits from the target. Pixels at
- * the target colour go fully transparent; pixels far from it stay solid;
- * everything between gets graduated partial alpha. Each pixel's colour is
- * then decontaminated (the target colour is unmixed back out), so there is
- * no grey/dark matte fringe left ringing the artwork.
+ * Two independent stages, kept strictly separate (this separation is the
+ * whole point — conflating them was the regression this code reverts):
  *
- * threshold (0-100): a small inner zone forced fully transparent, for when
- *                    the background isn't perfectly uniform. 0 = pure C2A.
+ *   1. REMOVAL. Any pixel inside a force-transparent RGB-distance ball of
+ *      radius `transparency` around the target is cleared outright (alpha 0).
+ *      This is the control that actually clears the background — crank it
+ *      until the last of the backdrop is gone. A near-uniform or gently
+ *      gradiated background needs a ball wide enough to swallow its spread.
+ *
+ *   2. COLOUR + ALPHA for everything else. Per-channel GIMP coverage gives
+ *      `cov`, the pixel's true foreground fraction. The colour is
+ *      decontaminated (target unmixed back out) using `cov` ITSELF — never a
+ *      slider-derived number — so a pixel's recovered hue is STABLE no matter
+ *      where the sliders sit. The `opacity` slider only shapes the output
+ *      alpha (coverage at/above which artwork is held fully solid); it does
+ *      not touch colour.
+ *
+ * The previous version divided the colour unmix by a slider-remapped alpha,
+ * which made every pixel's hue drift as the sliders moved (skin tones sliding
+ * green, etc.) and left the background as a field of faint semi-transparent
+ * ghosts instead of clearing it. Both are fixed here.
+ *
+ * transparency (0-100): radius of the force-transparent ball (RGB distance).
+ * opacity      (0-100): coverage at/above which recovered artwork is fully
+ *                       solid; below it the alpha ramps down to the ball edge.
  */
 export function applyColorToAlphaInPlace(
   data: Uint8ClampedArray,
   tR: number, tG: number, tB: number,
-  transparency: number, // 0-100: coverage at/below which a pixel goes fully clear
-  opacity: number,      // 0-100: coverage at/above which a pixel stays fully solid
+  transparency: number,
+  opacity: number,
 ): void {
-  const tT = transparency / 100;
-  const oT = opacity / 100;
-  // Width of the graded zone. Guarded so opacity <= transparency degrades to
-  // a near-hard cutoff instead of dividing by zero.
-  const den = Math.max(oT - tT, 0.001);
+  // Stage 1 threshold: a hard RGB-distance ball. 0-100 maps straight to RGB
+  // distance, exactly as the pre-regression single-slider version did.
+  const forceSq = transparency * transparency;
+  // Stage 2: coverage at/above which the recovered artwork is fully opaque.
+  // Guarded against 0 so the ramp never divides by zero.
+  const solidAt = Math.max(opacity / 100, 0.001);
+
   for (let i = 0; i < data.length; i += 4) {
     const a0 = data[i + 3];
     if (a0 === 0) continue;
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const dr = r - tR, dg = g - tG, db = b - tB;
+
+    // Stage 1 — force-transparent ball. This is what fully clears the
+    // background, including a slightly non-uniform / gradiated one.
+    if (dr * dr + dg * dg + db * db <= forceSq) {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+      continue;
+    }
+
     // Per-channel coverage: how far each channel sits from the target,
     // normalised by the room available toward white (or black).
     const ar = dr > 0 ? dr / (255 - tR) : dr < 0 ? -dr / tR : 0;
     const ag = dg > 0 ? dg / (255 - tG) : dg < 0 ? -dg / tG : 0;
     const ab = db > 0 ? db / (255 - tB) : db < 0 ? -db / tB : 0;
     const cov = ar > ag ? (ar > ab ? ar : ab) : (ag > ab ? ag : ab);
-
-    // GIMP/Photopea two-threshold remap: below the transparency threshold
-    // -> fully clear; above the opacity threshold -> fully solid; graded
-    // between. This is what stops solid artwork from washing out.
-    let alpha = (cov - tT) / den;
-    if (alpha <= 0) {
+    if (cov <= 0) {
       data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
       continue;
     }
-    if (alpha > 1) alpha = 1;
-    // Decontaminate (unmix the target colour back out). At alpha === 1 this
-    // returns the pixel exactly unchanged, so solid artwork is left intact.
-    data[i]     = clampByte(tR + dr / alpha);
-    data[i + 1] = clampByte(tG + dg / alpha);
-    data[i + 2] = clampByte(tB + db / alpha);
-    data[i + 3] = Math.round(alpha * a0);
+
+    // Decontaminate with the TRUE coverage — never a slider-derived value —
+    // so recovered colours stay rock-stable as the sliders move.
+    data[i]     = clampByte(tR + dr / cov);
+    data[i + 1] = clampByte(tG + dg / cov);
+    data[i + 2] = clampByte(tB + db / cov);
+
+    // Output alpha: opacity slider sets the coverage at/above which the
+    // recovered artwork is fully solid; below it the alpha ramps down.
+    const aFrac = cov >= solidAt ? 1 : cov / solidAt;
+    data[i + 3] = Math.round(aFrac * a0);
   }
 }
 
