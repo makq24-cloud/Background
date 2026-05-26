@@ -257,22 +257,29 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
       });
 
       const file = new File([blob], finalName, { type: 'image/png' });
-      const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
+      const nav = navigator as Navigator & {
+        canShare?: (d: { files: File[] }) => boolean;
+        share?: (d: { files: File[] }) => Promise<void>;
+      };
 
-      // Prefer the iOS share sheet — "Save Image" drops it straight into
-      // Photos, no clunky preview tab. Fall back to a download anchor.
-      if (nav.canShare && nav.canShare({ files: [file] })) {
+      // Route to the iOS share sheet whenever it exists — "Save Image" there
+      // drops the file straight into Photos. canShare() is only a hint and
+      // returns false for large files on iOS; calling share() anyway still
+      // works and avoids the anchor-download fallback, which on iOS opens a
+      // preview tab instead of saving. Fall back to the anchor only when
+      // share is genuinely unavailable or actually fails.
+      let saved = false;
+      if (typeof nav.share === 'function') {
         try {
           await nav.share({ files: [file] });
+          saved = true;
         } catch (err) {
-          // Cancelling the sheet throws AbortError — that's fine, not a failure.
-          if (err instanceof Error && err.name !== 'AbortError') {
-            anchorDownload(blob, finalName);
-          }
+          // Cancelling the sheet throws AbortError — the user chose not to
+          // save, so treat it as handled rather than dumping a preview tab.
+          if (err instanceof Error && err.name === 'AbortError') saved = true;
         }
-      } else {
-        anchorDownload(blob, finalName);
       }
+      if (!saved) anchorDownload(blob, finalName);
 
       setExportProgress(100);
       setTimeout(() => setExporting(false), 600);

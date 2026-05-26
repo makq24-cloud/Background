@@ -28,7 +28,8 @@ type Interaction =
 
 const HANDLE_R = 10;
 const HANDLE_HIT = 28;
-const MARGIN = 10; // canvas breathing room so edge strokes/handles aren't clipped
+const MARGIN = 28; // gutter around the platen so the canvas edge is clearly
+                   // visible and artwork crossing it is obvious
 
 function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
   const sz = 12;
@@ -221,10 +222,16 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
       ctx.stroke();
     });
 
-    // Platen edge.
-    ctx.strokeStyle = '#1f2937';
+    // Platen edge — the canvas boundary. Bright with a soft dark shadow so it
+    // stays clearly readable over any artwork or the checkerboard, instead of
+    // the near-invisible dark-grey line it used to be.
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
     ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, pw, ph);
+    ctx.restore();
   }, [platen, displayScale, pos, dispW, dispH, snapH, snapV, offEdge, cornerPoints]);
 
   // --- Pointer interaction --------------------------------------------------
