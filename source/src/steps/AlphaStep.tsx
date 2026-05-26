@@ -385,24 +385,46 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     }
   };
 
-  // Auto-fit zoom so the canvas fills the available width on first render
-  // and whenever the source changes. Users can still zoom in/out from here.
-  const fitToScreen = useCallback(() => {
+  // Tracks whether the user has set their own zoom. Once they have, automatic
+  // re-fits triggered by layout changes leave their zoom alone.
+  const userZoomedRef = useRef(false);
+  // Last wrap width an auto-fit was computed against — lets us ignore
+  // height-only layout changes.
+  const lastFitWidthRef = useRef(0);
+
+  // Fit the canvas to the available width. `force` (Fit button / new image)
+  // clears the manual-zoom flag so auto-fitting is allowed again.
+  const fitToScreen = useCallback((force = false) => {
     const wrap = canvasWrapRef.current;
     if (!wrap || !previewSource) return;
     const avail = wrap.clientWidth - 4; // small padding
     if (avail <= 0) return;
+    if (force) userZoomedRef.current = false;
+    lastFitWidthRef.current = avail;
     setZoom(clamp(avail / previewSource.width, 0.1, 4));
   }, [previewSource]);
 
+  // Auto-fit once when a new image's preview arrives.
   useEffect(() => {
-    fitToScreen();
-    // Re-fit whenever the wrap's measured width changes — covers orientation
-    // change, the initial layout settling after mount, and the moment when
-    // the preview image arrives and the wrap finally has a non-zero width.
+    userZoomedRef.current = false;
+    lastFitWidthRef.current = 0;
+    fitToScreen(true);
+  }, [fitToScreen]);
+
+  // Re-fit ONLY when the wrap's WIDTH actually changes (an orientation change),
+  // and never once the user has chosen their own zoom. A height-only change —
+  // e.g. the 'Original' info banner appearing and shrinking the canvas area —
+  // must NOT touch zoom, so the original-vs-processed comparison stays locked
+  // at the same magnification.
+  useEffect(() => {
     const wrap = canvasWrapRef.current;
     if (!wrap) return;
-    const ro = new ResizeObserver(() => fitToScreen());
+    const ro = new ResizeObserver(() => {
+      const avail = wrap.clientWidth - 4;
+      if (avail <= 0 || Math.abs(avail - lastFitWidthRef.current) < 1) return;
+      lastFitWidthRef.current = avail;
+      if (!userZoomedRef.current) fitToScreen();
+    });
     ro.observe(wrap);
     return () => ro.disconnect();
   }, [fitToScreen]);
@@ -448,12 +470,12 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
             className="w-7 h-6 rounded cursor-pointer bg-transparent border-0" />
         )}
         <div className="flex-1" />
-        <button onClick={() => setZoom(z => Math.max(z / 1.4, 0.1))}
+        <button onClick={() => { userZoomedRef.current = true; setZoom(z => Math.max(z / 1.4, 0.1)); }}
           className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom out"><ZoomOut size={14} /></button>
         <span className="text-xs text-gray-400 w-9 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-        <button onClick={() => setZoom(z => Math.min(z * 1.4, 12))}
+        <button onClick={() => { userZoomedRef.current = true; setZoom(z => Math.min(z * 1.4, 12)); }}
           className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Zoom in"><ZoomIn size={14} /></button>
-        <button onClick={fitToScreen}
+        <button onClick={() => fitToScreen(true)}
           className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded transition" title="Fit to screen"><Maximize2 size={12} /></button>
       </div>
 

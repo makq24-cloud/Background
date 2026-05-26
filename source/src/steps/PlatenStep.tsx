@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState } from '../App';
+import { lanczosResize, imageDataToCanvas } from '../utils/imageUtils';
 
 const TEMPLATES = [
   { name: 'Neato Regular', short: 'Neato Reg',   label: '12"×16"', width: 3600, height: 4800 },
@@ -60,6 +61,7 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
   const [interaction, setInteraction] = useState<Interaction>({ kind: 'none' });
   const [snapH, setSnapH] = useState<'left' | 'center' | 'right' | null>(null);
   const [snapV, setSnapV] = useState<'top' | 'center' | 'bottom' | null>(null);
+  const [rendering, setRendering] = useState(false);
   const didInit = useRef(false);
 
   useEffect(() => {
@@ -321,30 +323,49 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
   // --- Commit ---------------------------------------------------------------
   const proceed = () => {
     const sc = srcCanvasRef.current;
-    if (!platen || !sc) return;
-    const out = document.createElement('canvas');
-    out.width = platen.width;
-    out.height = platen.height;
-    const ctx = out.getContext('2d')!;
-    ctx.clearRect(0, 0, out.width, out.height);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    // Integer-align so the placed image has crisp edges — no anti-aliased fringe.
-    ctx.drawImage(
-      sc,
-      Math.round(pos.x), Math.round(pos.y),
-      Math.round(srcW * scale), Math.round(srcH * scale),
-    );
-    updateState({
-      platenDimensions: platen,
-      platenName: selectedTemplate,
-      canvasData: ctx.getImageData(0, 0, out.width, out.height),
-      // Drop any prealpha buffer from a previous run — this new composite
-      // must be what the Background step reprocesses, not the old layout.
-      prealphaCanvas: null,
-      currentStep: 3,
-    });
-    goToStep(3);
+    if (!platen || !sc || rendering) return;
+    setRendering(true);
+    // Defer one tick so the button can paint its "Rendering…" state before the
+    // Lanczos pass blocks the main thread.
+    setTimeout(() => {
+      const out = document.createElement('canvas');
+      out.width = platen.width;
+      out.height = platen.height;
+      const ctx = out.getContext('2d')!;
+      ctx.clearRect(0, 0, out.width, out.height);
+
+      // Integer-aligned target size + position so the placed art has crisp
+      // edges with no anti-aliased fringe.
+      const tw = Math.max(1, Math.round(srcW * scale));
+      const th = Math.max(1, Math.round(srcH * scale));
+      const ox = Math.round(pos.x);
+      const oy = Math.round(pos.y);
+
+      if (tw === sc.width && th === sc.height) {
+        // Placed at native size — no resample at all, pixel-exact.
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(sc, ox, oy);
+      } else {
+        // Sharp Lanczos-3 up/downscale — replaces the browser's soft bicubic
+        // so logo edges and lettering stay clean at platen resolution.
+        const srcData = sc.getContext('2d')!.getImageData(0, 0, sc.width, sc.height);
+        const scaled = lanczosResize(srcData, tw, th);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(imageDataToCanvas(scaled), ox, oy);
+      }
+
+      updateState({
+        platenDimensions: platen,
+        platenName: selectedTemplate,
+        canvasData: ctx.getImageData(0, 0, out.width, out.height),
+        // Drop any prealpha buffer from a previous run — this new composite
+        // must be what the Background step reprocesses, not the old layout.
+        prealphaCanvas: null,
+        currentStep: 3,
+      });
+      setRendering(false);
+      goToStep(3);
+    }, 30);
   };
 
   const PRESETS: { id: Exclude<Preset, 'custom'>; label: string; sub: string }[] = [
@@ -430,10 +451,10 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
         </button>
         <button
           onClick={proceed}
-          disabled={!platen}
+          disabled={!platen || rendering}
           className="flex-1 px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl font-semibold transition"
         >
-          Continue
+          {rendering ? 'Rendering…' : 'Continue'}
         </button>
       </div>
     </div>

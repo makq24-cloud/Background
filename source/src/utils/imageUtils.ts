@@ -190,3 +190,120 @@ export function autoTrimEdges(img: ImageData): ImageData {
   if (nw < W * 0.5 || nh < H * 0.5) return img; // safety — never trim that aggressively
   return cropImageData(img, left, top, nw, nh);
 }
+// ---------------------------------------------------------------------------
+// Lanczos-3 resampling.
+//
+// Replaces the browser's bilinear/bicubic drawImage scaling, which visibly
+// softens edges and lettering when an image is scaled UP to platen resolution.
+// Lanczos reconstructs a sharp result: it will not invent detail the way an AI
+// upscaler (Gigapixel) does, but it keeps every edge that is already there
+// crisp instead of blurring it — the right behaviour for graphic-tee art where
+// logos and text must stay clean at 300 DPI.
+//
+// Alpha is premultiplied before resampling and divided back out afterwards, so
+// the transparent cut-out edge of a background-removed image gets no dark or
+// light colour fringe.
+// ---------------------------------------------------------------------------
+const LANCZOS_A = 3;
+
+function lanczosKernel(x: number): number {
+  if (x === 0) return 1;
+  if (x <= -LANCZOS_A || x >= LANCZOS_A) return 0;
+  const px = Math.PI * x;
+  return (LANCZOS_A * Math.sin(px) * Math.sin(px / LANCZOS_A)) / (px * px);
+}
+
+function clampByte(v: number): number {
+  return v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
+}
+
+// For each destination index, precompute which source samples feed it and
+// with what (normalised) weights. When downscaling, the kernel footprint is
+// widened so the result is a correct area average rather than point samples.
+function buildContributions(
+  srcLen: number,
+  dstLen: number,
+): { idx: Int32Array; wts: Float32Array }[] {
+  const scale = dstLen / srcLen;
+  const invScale = 1 / scale;
+  const support = scale < 1 ? LANCZOS_A * invScale : LANCZOS_A;
+  const out: { idx: Int32Array; wts: Float32Array }[] = [];
+  for (let d = 0; d < dstLen; d++) {
+    const center = (d + 0.5) * invScale - 0.5;
+    const lo = Math.max(0, Math.ceil(center - support));
+    const hi = Math.min(srcLen - 1, Math.floor(center + support));
+    const n = Math.max(0, hi - lo + 1);
+    const idx = new Int32Array(n);
+    const wts = new Float32Array(n);
+    let sum = 0;
+    for (let s = lo; s <= hi; s++) {
+      const t = scale < 1 ? (s - center) * scale : s - center;
+      const w = lanczosKernel(t);
+      idx[s - lo] = s;
+      wts[s - lo] = w;
+      sum += w;
+    }
+    if (sum !== 0) for (let k = 0; k < n; k++) wts[k] /= sum;
+    out.push({ idx, wts });
+  }
+  return out;
+}
+
+export function lanczosResize(src: ImageData, dstW: number, dstH: number): ImageData {
+  const { width: sw, height: sh, data: sd } = src;
+  if (dstW === sw && dstH === sh) return cloneImageData(src);
+
+  // Premultiply alpha into a float buffer.
+  const srcPM = new Float32Array(sw * sh * 4);
+  for (let i = 0; i < sw * sh; i++) {
+    const a = sd[i * 4 + 3] / 255;
+    srcPM[i * 4]     = sd[i * 4]     * a;
+    srcPM[i * 4 + 1] = sd[i * 4 + 1] * a;
+    srcPM[i * 4 + 2] = sd[i * 4 + 2] * a;
+    srcPM[i * 4 + 3] = sd[i * 4 + 3];
+  }
+
+  // Pass 1 — horizontal: (sw x sh) -> (dstW x sh).
+  const colC = buildContributions(sw, dstW);
+  const tmp = new Float32Array(dstW * sh * 4);
+  for (let y = 0; y < sh; y++) {
+    const srcRow = y * sw * 4;
+    const tmpRow = y * dstW * 4;
+    for (let x = 0; x < dstW; x++) {
+      const c = colC[x];
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let k = 0; k < c.idx.length; k++) {
+        const p = srcRow + c.idx[k] * 4;
+        const w = c.wts[k];
+        r += srcPM[p] * w; g += srcPM[p + 1] * w;
+        b += srcPM[p + 2] * w; a += srcPM[p + 3] * w;
+      }
+      const tp = tmpRow + x * 4;
+      tmp[tp] = r; tmp[tp + 1] = g; tmp[tp + 2] = b; tmp[tp + 3] = a;
+    }
+  }
+
+  // Pass 2 — vertical: (dstW x sh) -> (dstW x dstH), un-premultiplied on write.
+  const rowC = buildContributions(sh, dstH);
+  const out = new ImageData(dstW, dstH);
+  const od = out.data;
+  for (let x = 0; x < dstW; x++) {
+    for (let y = 0; y < dstH; y++) {
+      const c = rowC[y];
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let k = 0; k < c.idx.length; k++) {
+        const p = (c.idx[k] * dstW + x) * 4;
+        const w = c.wts[k];
+        r += tmp[p] * w; g += tmp[p + 1] * w;
+        b += tmp[p + 2] * w; a += tmp[p + 3] * w;
+      }
+      const op = (y * dstW + x) * 4;
+      const af = a / 255;
+      od[op]     = af > 0 ? clampByte(r / af) : 0;
+      od[op + 1] = af > 0 ? clampByte(g / af) : 0;
+      od[op + 2] = af > 0 ? clampByte(b / af) : 0;
+      od[op + 3] = clampByte(a);
+    }
+  }
+  return out;
+}
