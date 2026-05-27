@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ZoomIn, ZoomOut, Pipette, Maximize2 } from 'lucide-react';
 import { AppState } from '../App';
 import {
-  applyTrueColorToAlpha, applyColorToAlpha,
+  applyTrueColorToAlpha, applyColorToAlpha, applyHalftone,
   downscalePreview, detectDominantShade, detectBackgroundShade,
 } from '../utils/alphaEngine';
 import { runAlpha } from '../utils/alphaClient';
@@ -46,10 +46,18 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const [softness, setSoftness] = useState(state.alphaSettings.alphaContrast || 15);
   // 'solid' = bounded edge feather (opaque interiors). 'c2a' = true Photopea
   // color-to-alpha: graduated transparency everywhere + decontamination.
-  const [colorMode, setColorMode] = useState<'solid' | 'c2a'>('solid');
+  // 'halftone' = clustered-dot screening: the fade becomes solid dots, with
+  // zero semi-transparent pixels in the output.
+  const [colorMode, setColorMode] = useState<'solid' | 'c2a' | 'halftone'>('solid');
   // Color-to-alpha: how much artwork to hold fully solid (higher = less
   // wash-out). Passed to the engine inverted as the opacity threshold.
   const [keepSolid, setKeepSolid] = useState(60);
+  // Halftone settings. lpi = dot frequency (15-60, lower = bigger dots);
+  // screenAngle = screen rotation; halftoneFade = width of the dotted
+  // transition band between knocked-out background and solid artwork.
+  const [lpi, setLpi] = useState(30);
+  const [screenAngle, setScreenAngle] = useState(45);
+  const [halftoneFade, setHalftoneFade] = useState(50);
   const [targetColor, setTargetColor] = useState(rgbToHex(...state.alphaSettings.targetColor));
   const [bgMode, setBgMode] = useState<BgMode>('checker');
   const [customBgColor, setCustomBgColor] = useState('#888888');
@@ -95,18 +103,33 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   useEffect(() => {
     if (!previewSource) return;
     const [r, g, b] = hexToRgb(targetColor);
-    const processed = colorMode === 'c2a'
-      ? applyColorToAlpha(previewSource, r, g, b, sensitivity, 100 - keepSolid)
-      : applyTrueColorToAlpha(previewSource, r, g, b, sensitivity, softness);
+    let processed: ImageData;
+    if (colorMode === 'c2a') {
+      processed = applyColorToAlpha(previewSource, r, g, b, sensitivity, 100 - keepSolid);
+    } else if (colorMode === 'halftone') {
+      // The halftone cell pitch is defined in full-resolution pixels
+      // (300 DPI ÷ LPI). The preview runs on a downscaled image, so the
+      // cell is scaled by the same ratio to keep the dots visually
+      // representative of what the committed full-res file will show.
+      const fullCell = 300 / Math.max(1, lpi);
+      const scale = sourceImg ? previewSource.width / sourceImg.width : 1;
+      processed = applyHalftone(
+        previewSource, r, g, b, sensitivity, halftoneFade, fullCell * scale, screenAngle,
+      );
+    } else {
+      processed = applyTrueColorToAlpha(previewSource, r, g, b, sensitivity, softness);
+    }
     setProcessedPreview(processed);
-  }, [previewSource, sensitivity, softness, targetColor, colorMode, keepSolid]);
+  }, [previewSource, sourceImg, sensitivity, softness, targetColor, colorMode, keepSolid, lpi, screenAngle, halftoneFade]);
 
   // Connected-component analysis. Runs whenever the preview is ready — NOT
   // gated on the slider — so the screen can passively tell the user whether
   // the transparent areas are clean, with no extra tap to find out.
+  // Skipped entirely in halftone mode: the output is thousands of intended
+  // dots, which the speck finder would (wrongly) treat as junk.
   const speckAnalysis = useMemo(
-    () => (processedPreview ? analyzeSpecks(processedPreview) : null),
-    [processedPreview]
+    () => (processedPreview && colorMode !== 'halftone' ? analyzeSpecks(processedPreview) : null),
+    [processedPreview, colorMode]
   );
 
   // Per-component distance to the real artwork — the signal that separates a
@@ -327,9 +350,15 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // here for the duration. The worker hands BOTH buffers back, so we
       // rebuild fresh ImageDatas for canvasData (result) and prealphaCanvas
       // (source, untouched bytes) without a separate clone allocation.
-      const { prealpha, result } = await runAlpha(sourceImg, r, g, b, sensitivity, softness, colorMode, 100 - keepSolid);
+      const { prealpha, result } = await runAlpha(
+        sourceImg, r, g, b, sensitivity,
+        colorMode === 'halftone' ? halftoneFade : softness,
+        colorMode, 100 - keepSolid, lpi, screenAngle,
+      );
       updateState({
-        canvasData: withDotCleanup(result),
+        // Halftone output is intentionally all tiny dots — the speck
+        // cleaner would erase them, so skip it for that mode.
+        canvasData: colorMode === 'halftone' ? result : withDotCleanup(result),
         prealphaCanvas: prealpha,
         alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
         alphaUserTuned: true,
@@ -367,9 +396,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       try {
         const final = colorMode === 'c2a'
           ? applyColorToAlpha(sourceImg, r, g, b, sensitivity, 100 - keepSolid)
+          : colorMode === 'halftone'
+          ? applyHalftone(sourceImg, r, g, b, sensitivity, halftoneFade, 300 / Math.max(1, lpi), screenAngle)
           : applyTrueColorToAlpha(sourceImg, r, g, b, sensitivity, softness);
         updateState({
-          canvasData: withDotCleanup(final),
+          canvasData: colorMode === 'halftone' ? final : withDotCleanup(final),
           prealphaCanvas: sourceImg,
           alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
           alphaUserTuned: true,
@@ -550,29 +581,27 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
           </button>
         </div>
 
-        <div className="flex gap-2">
-          <button
-            onClick={() => { setColorMode('solid'); updateState({ alphaUserTuned: true }); }}
-            className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition ${
-              colorMode === 'solid' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
-            }`}
-          >
-            Solid cut
-            <span className="block text-[11px] font-normal opacity-75">Crisp opaque interior</span>
-          </button>
-          <button
-            onClick={() => { setColorMode('c2a'); updateState({ alphaUserTuned: true }); }}
-            className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition ${
-              colorMode === 'c2a' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
-            }`}
-          >
-            Color to Alpha
-            <span className="block text-[11px] font-normal opacity-75">Graded ink, no halo</span>
-          </button>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            ['solid', 'Solid Cut', 'Opaque interior'],
+            ['c2a', 'Color to Alpha', 'Graded ink'],
+            ['halftone', 'Halftone', 'Dot screen'],
+          ] as const).map(([mode, label, sub]) => (
+            <button
+              key={mode}
+              onClick={() => { setColorMode(mode); updateState({ alphaUserTuned: true }); }}
+              className={`px-2 py-2 rounded-lg text-xs font-semibold leading-tight transition ${
+                colorMode === mode ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              {label}
+              <span className="block text-[10px] font-normal opacity-75">{sub}</span>
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-3">
-          <label className="text-sm font-semibold w-24 shrink-0">{colorMode === 'c2a' ? 'Transparency' : 'Threshold'}</label>
+          <label className="text-sm font-semibold w-24 shrink-0">{colorMode === 'c2a' ? 'Transparency' : colorMode === 'halftone' ? 'Knockout' : 'Threshold'}</label>
           <input type="range" min="0" max="100" value={sensitivity}
             onChange={e => { setSensitivity(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
             className="flex-1 accent-blue-500" />
@@ -599,23 +628,59 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
-          <label className="text-sm font-semibold w-24 shrink-0">Dot Cleanup</label>
-          <input type="range" min="0" max="100" value={dotCleanup}
-            onChange={e => setDotCleanup(parseInt(e.target.value))}
-            className="flex-1 accent-red-500" />
-          <span className="font-mono text-sm w-20 text-right tabular-nums">
-            {!speckAnalysis ? (
-              <span className="text-gray-500">…</span>
-            ) : dotSurvey.looseCount === 0 ? (
-              <span className="text-green-400">Clean</span>
-            ) : dotCleanup === 0 ? (
-              <span className="text-amber-400">{dotSurvey.looseCount} ●</span>
-            ) : (
-              <span className="text-red-400">{dotSurvey.removeCount}/{dotSurvey.looseCount} ●</span>
-            )}
-          </span>
-        </div>
+        {colorMode === 'halftone' && (
+          <>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-semibold w-24 shrink-0">Fade</label>
+              <input type="range" min="0" max="100" value={halftoneFade}
+                onChange={e => { setHalftoneFade(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+                className="flex-1 accent-blue-500" />
+              <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{halftoneFade}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-semibold w-24 shrink-0">LPI</label>
+              <input type="range" min="15" max="60" value={lpi}
+                onChange={e => { setLpi(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+                className="flex-1 accent-blue-500" />
+              <span className="font-mono text-sm w-16 text-right tabular-nums">
+                <span className="text-blue-400">{lpi}</span>
+                {lpi < 45 && <span className="text-amber-400"> ●</span>}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-semibold w-24 shrink-0">Angle</label>
+              <input type="range" min="0" max="90" value={screenAngle}
+                onChange={e => { setScreenAngle(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+                className="flex-1 accent-blue-500" />
+              <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{screenAngle}°</span>
+            </div>
+            <p className="text-[11px] text-gray-500 leading-snug">
+              Halftone output has no semi-transparent pixels — the fade is
+              made of solid dots. Lower LPI = bigger dots; the amber dot
+              marks the sub-45 range that can transfer less reliably on DTF.
+            </p>
+          </>
+        )}
+
+        {colorMode !== 'halftone' && (
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-semibold w-24 shrink-0">Dot Cleanup</label>
+            <input type="range" min="0" max="100" value={dotCleanup}
+              onChange={e => setDotCleanup(parseInt(e.target.value))}
+              className="flex-1 accent-red-500" />
+            <span className="font-mono text-sm w-20 text-right tabular-nums">
+              {!speckAnalysis ? (
+                <span className="text-gray-500">…</span>
+              ) : dotSurvey.looseCount === 0 ? (
+                <span className="text-green-400">Clean</span>
+              ) : dotCleanup === 0 ? (
+                <span className="text-amber-400">{dotSurvey.looseCount} ●</span>
+              ) : (
+                <span className="text-red-400">{dotSurvey.removeCount}/{dotSurvey.looseCount} ●</span>
+              )}
+            </span>
+          </div>
+        )}
 
         <button onClick={proceed} disabled={committing}
           className="w-full px-4 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl font-semibold transition">

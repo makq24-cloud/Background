@@ -63,6 +63,8 @@ export function runAlpha(
   softness: number,
   mode: AlphaMode,
   opacity: number,
+  lpi: number,
+  angle: number,
 ): Promise<{ prealpha: ImageData; result: ImageData }> {
   return new Promise((resolve, reject) => {
     const id = nextId++;
@@ -73,7 +75,7 @@ export function runAlpha(
       sourceBuf: source.data.buffer,
       width: source.width,
       height: source.height,
-      r, g, b, threshold, softness, opacity, mode,
+      r, g, b, threshold, softness, opacity, mode, lpi, angle,
     };
 
     try {

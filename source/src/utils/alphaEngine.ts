@@ -545,3 +545,104 @@ export function detectBackgroundShade(img: ImageData): 'dark' | 'light' {
   if (count === 0) return 'dark';
   return sum / count > 128 ? 'light' : 'dark';
 }
+
+// ── Halftone screening ──────────────────────────────────────────────────
+// Converts the soft fade between artwork and the knockout colour into a
+// pattern of solid clustered dots. The output has NO semi-transparent
+// pixels — every pixel is either full ink (alpha 255, original colour) or
+// knocked out (alpha 0). The fade is carried entirely by dot DENSITY, the
+// way real screen-print halftones do it, so colours are never lifted or
+// made translucent the way color-to-alpha does.
+//
+// Pixels are classified by RGB distance from the knockout colour:
+//   d ≤ knockout              → knocked out
+//   knockout < d < knockout+fade → halftone zone (clustered dots)
+//   d ≥ knockout + fade       → solid ink, untouched
+//
+// In the halftone zone a clustered-dot threshold screen decides each
+// pixel: it is inked when the local coverage exceeds the screen value at
+// that position. `cellSize` is the dot-cell pitch in pixels (print DPI ÷
+// LPI); `angleDeg` rotates the screen grid.
+
+const HALFTONE_LUT_SIZE = 1024;
+const HALFTONE_COS_LUT = (() => {
+  const t = new Float32Array(HALFTONE_LUT_SIZE);
+  for (let i = 0; i < HALFTONE_LUT_SIZE; i++) {
+    t[i] = Math.cos((2 * Math.PI * i) / HALFTONE_LUT_SIZE);
+  }
+  return t;
+})();
+
+export function applyHalftoneInPlace(
+  data: Uint8ClampedArray,
+  width: number,
+  tR: number, tG: number, tB: number,
+  knockout: number,   // 0-100 → RGB-distance ball that is fully removed
+  fade: number,       // 0-100 → width of the halftone transition band
+  cellSize: number,   // dot-cell pitch in pixels (print DPI ÷ LPI)
+  angleDeg: number,
+): void {
+  const forceDist = knockout;
+  const forceSq = forceDist * forceDist;
+  const fadeWidth = (fade / 100) * 200;
+  const fadeEnd = forceDist + fadeWidth;
+  const fadeEndSq = fadeEnd * fadeEnd;
+
+  const cell = Math.max(2, cellSize);
+  const invCell = 1 / cell;
+  const rad = (angleDeg * Math.PI) / 180;
+  const ca = Math.cos(rad), sa = Math.sin(rad);
+  const mask = HALFTONE_LUT_SIZE - 1;
+
+  const n = data.length >> 2;
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    const a0 = data[i + 3];
+    if (a0 === 0) continue;
+
+    const dr = data[i] - tR, dg = data[i + 1] - tG, db = data[i + 2] - tB;
+    const dsq = dr * dr + dg * dg + db * db;
+
+    let coverage: number;
+    if (dsq <= forceSq) coverage = 0;
+    else if (fadeWidth === 0 || dsq >= fadeEndSq) coverage = 1;
+    else coverage = (Math.sqrt(dsq) - forceDist) / fadeWidth;
+
+    if (coverage <= 0) {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+      continue;
+    }
+    if (coverage >= 1) { data[i + 3] = 255; continue; } // solid ink
+
+    // Halftone zone — clustered-dot threshold screen. screenT is 0 at a
+    // dot centre and 1 midway between dots; the pixel inks when coverage
+    // clears that threshold, so dots grow as coverage rises.
+    const x = p % width;
+    const y = (p - x) / width;
+    const xr = x * ca + y * sa;
+    const yr = -x * sa + y * ca;
+    let u = xr * invCell; u -= Math.floor(u);
+    let v = yr * invCell; v -= Math.floor(v);
+    const cu = HALFTONE_COS_LUT[(u * HALFTONE_LUT_SIZE) & mask];
+    const cv = HALFTONE_COS_LUT[(v * HALFTONE_LUT_SIZE) & mask];
+    const screenT = (2 - cu - cv) * 0.25;
+
+    if (coverage > screenT) {
+      data[i + 3] = 255;
+    } else {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+    }
+  }
+}
+
+export function applyHalftone(
+  imageData: ImageData,
+  tR: number, tG: number, tB: number,
+  knockout: number, fade: number, cellSize: number, angleDeg: number,
+): ImageData {
+  const result = new ImageData(imageData.width, imageData.height);
+  result.data.set(imageData.data);
+  applyHalftoneInPlace(
+    result.data, imageData.width, tR, tG, tB, knockout, fade, cellSize, angleDeg,
+  );
+  return result;
+}

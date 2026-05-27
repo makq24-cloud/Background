@@ -1,6 +1,14 @@
-import { applyTrueColorToAlphaInPlace, applyColorToAlphaInPlace } from './alphaEngine';
+import {
+  applyTrueColorToAlphaInPlace,
+  applyColorToAlphaInPlace,
+  applyHalftoneInPlace,
+} from './alphaEngine';
 
-export type AlphaMode = 'solid' | 'c2a';
+export type AlphaMode = 'solid' | 'c2a' | 'halftone';
+
+// Print resolution of the platen composite — halftone cell pitch is
+// derived from this and the chosen LPI (cell pixels = DPI / LPI).
+const PRINT_DPI = 300;
 
 export type AlphaRequest = {
   id: number;
@@ -14,6 +22,8 @@ export type AlphaRequest = {
   softness: number;
   opacity: number;
   mode: AlphaMode;
+  lpi: number;    // halftone: lines per inch
+  angle: number;  // halftone: screen angle, degrees
 };
 
 export type AlphaResponse =
@@ -21,7 +31,7 @@ export type AlphaResponse =
   | { id: number; ok: false; error: string };
 
 self.onmessage = (e: MessageEvent<AlphaRequest>) => {
-  const { id, sourceBuf, width, height, r, g, b, threshold, softness, opacity, mode } = e.data;
+  const { id, sourceBuf, width, height, r, g, b, threshold, softness, opacity, mode, lpi, angle } = e.data;
 
   try {
     // Allocate a fresh result buffer of the same size and seed it with the
@@ -32,6 +42,10 @@ self.onmessage = (e: MessageEvent<AlphaRequest>) => {
 
     if (mode === 'c2a') {
       applyColorToAlphaInPlace(resultView, r, g, b, threshold, opacity);
+    } else if (mode === 'halftone') {
+      // softness carries the fade-band width for this mode.
+      const cellSize = PRINT_DPI / Math.max(1, lpi);
+      applyHalftoneInPlace(resultView, width, r, g, b, threshold, softness, cellSize, angle);
     } else {
       applyTrueColorToAlphaInPlace(resultView, r, g, b, threshold, softness);
     }
