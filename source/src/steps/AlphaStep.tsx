@@ -639,7 +639,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
             </div>
             <div className="flex items-center gap-3">
               <label className="text-sm font-semibold w-24 shrink-0">LPI</label>
-              <input type="range" min="25" max="60" value={lpi}
+              <input type="range" min="15" max="60" value={lpi}
                 onChange={e => { setLpi(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
                 className="flex-1 accent-blue-500" />
               <span className="font-mono text-sm w-16 text-right tabular-nums">
