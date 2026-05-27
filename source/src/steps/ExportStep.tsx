@@ -360,7 +360,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
             <div
               ref={previewWrapRef}
               className="rounded-lg border border-gray-700 bg-gray-950 flex items-center justify-center overflow-hidden"
-              style={{ minHeight: 320, maxHeight: '55vh' }}
+              style={{ height: '55vh', minHeight: 320 }}
             >
               <canvas ref={previewCanvasRef} style={{ display: 'block' }} />
             </div>
