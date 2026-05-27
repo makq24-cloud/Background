@@ -639,12 +639,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
             </div>
             <div className="flex items-center gap-3">
               <label className="text-sm font-semibold w-24 shrink-0">LPI</label>
-              <input type="range" min="15" max="60" value={lpi}
+              <input type="range" min="25" max="60" value={lpi}
                 onChange={e => { setLpi(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
                 className="flex-1 accent-blue-500" />
               <span className="font-mono text-sm w-16 text-right tabular-nums">
                 <span className="text-blue-400">{lpi}</span>
-                {lpi < 45 && <span className="text-amber-400"> ●</span>}
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -656,8 +655,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
             </div>
             <p className="text-[11px] text-gray-500 leading-snug">
               Halftone output has no semi-transparent pixels — the fade is
-              made of solid dots. Lower LPI = bigger dots; the amber dot
-              marks the sub-45 range that can transfer less reliably on DTF.
+              made of solid dots. Lower LPI = bigger dots.
             </p>
           </>
         )}
