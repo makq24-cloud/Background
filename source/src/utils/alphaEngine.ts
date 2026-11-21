@@ -13,6 +13,23 @@ function clampByte(v: number): number {
 }
 
 /**
+ * Minimum alpha a pixel may keep. Anything at or below this is snapped to a
+ * clean 0.
+ *
+ * Why this exists: every feather/coverage ramp in this file tapers toward
+ * zero, and the tail of that ramp rounds to alpha 1-7 instead of 0. Those
+ * pixels are invisible on any screen — but a DTG white underbase is laid
+ * wherever alpha > 0, so a near-transparent wash over the whole canvas
+ * prints as a solid rectangle on a dark garment. Measured on real exports:
+ * up to 33% of the canvas sat in the 1-7 band, corners included.
+ *
+ * 8/255 (~3%) is deliberately low. Intentional soft artwork — airbrush
+ * glows, feathered backdrops — lives at alpha 26-230, 3-30x above this, and
+ * is untouched. Raising the floor toward 15% would start eating that.
+ */
+export const MIN_ALPHA = 8;
+
+/**
  * In-place color-to-alpha. Mutates `data` (which is the RGBA byte array of
  * an ImageData). Used by the worker so it can run without allocating a new
  * output buffer alongside the input — caller pre-copies source bytes into
@@ -62,6 +79,12 @@ export function applyTrueColorToAlphaInPlace(
     }
 
     const finalAlpha = Math.round(alphaFrac * a);
+
+    // Ghost-alpha floor — see MIN_ALPHA.
+    if (finalAlpha <= MIN_ALPHA) {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+      continue;
+    }
 
     if (alphaFrac >= 1) {
       data[i + 3] = finalAlpha;
@@ -184,7 +207,13 @@ export function applyColorToAlphaInPlace(
     // Output alpha: opacity slider sets the coverage at/above which the
     // recovered artwork is fully solid; below it the alpha ramps down.
     const aFrac = cov >= solidAt ? 1 : cov / solidAt;
-    data[i + 3] = Math.round(aFrac * a0);
+    const outA = Math.round(aFrac * a0);
+    // Ghost-alpha floor — see MIN_ALPHA.
+    if (outA <= MIN_ALPHA) {
+      data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 0;
+      continue;
+    }
+    data[i + 3] = outA;
   }
 }
 
@@ -407,6 +436,11 @@ export function applyConnectedColorToAlpha(
 
     // Decontaminate: extract the foreground colour from the mixed pixel.
     const finalAlpha = Math.round(alphaFrac * a);
+    // Ghost-alpha floor — see MIN_ALPHA.
+    if (finalAlpha <= MIN_ALPHA) {
+      dst[i] = 0; dst[i + 1] = 0; dst[i + 2] = 0; dst[i + 3] = 0;
+      continue;
+    }
     const inv = 1 - alphaFrac;
     let nr = (r - targetR * inv) / alphaFrac;
     let ng = (g - targetG * inv) / alphaFrac;

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Download, Loader } from 'lucide-react';
+import { Download, Loader, AlertTriangle } from 'lucide-react';
 import UPNG from 'upng-js';
 import { AppState } from '../App';
 import { imageDataToCanvas, get2dContext } from '../utils/imageUtils';
 import { encodeDitheredPNG } from '../utils/ditherQuantize';
+import { findEdgeMarks, removeMarks, type EdgeMark } from '../utils/edgeMarks';
 
 const formatBytes = (n: number) =>
   n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -17,6 +18,11 @@ type Props = {
 type ReviewBg = 'black' | 'white' | 'checker' | 'original' | 'mask';
 
 export default function ExportStep({ state, updateState, goToStep }: Props) {
+  // Backstop: the Background step already offered to strip edge marks, but a
+  // "Keep" there, a skipped removal, or a later edit can still land marks in
+  // the final file. Re-check silently and surface a banner if any survived.
+  const [edgeMarks, setEdgeMarks] = useState<EdgeMark[]>([]);
+  const [edgeDismissed, setEdgeDismissed] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   // 'lossless' = exact pixels (default — never posterizes). 'compressed' =
@@ -322,12 +328,49 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
     goToStep(1);
   };
 
+  useEffect(() => {
+    if (!state.canvasData) { setEdgeMarks([]); return; }
+    try {
+      setEdgeMarks(findEdgeMarks(state.canvasData).marks);
+    } catch {
+      setEdgeMarks([]);
+    }
+  }, [state.canvasData]);
+
+  const stripEdgeMarks = () => {
+    if (!state.canvasData || edgeMarks.length === 0) return;
+    updateState({ canvasData: removeMarks(state.canvasData, edgeMarks) });
+    setEdgeMarks([]);
+  };
+
   return (
     <div className="space-y-5 max-w-2xl">
       <div>
         <h2 className="text-3xl font-bold mb-1">Export</h2>
         <p className="text-gray-400 text-sm">Check the result on different backgrounds before saving.</p>
       </div>
+
+      {edgeMarks.length > 0 && !edgeDismissed && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-950 border border-amber-900/70 rounded-lg">
+          <AlertTriangle size={17} className="text-amber-300 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-amber-200 text-sm font-semibold">
+              {edgeMarks.length} edge {edgeMarks.length === 1 ? 'mark' : 'marks'} still in this file
+            </p>
+            <p className="text-amber-400/80 text-xs mt-0.5">
+              {edgeMarks.map(m => m.side).filter((v, i, a) => a.indexOf(v) === i).join(', ')} — thin lines isolated from the artwork
+            </p>
+          </div>
+          <button onClick={stripEdgeMarks}
+            className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-amber-950 rounded text-xs font-semibold transition shrink-0">
+            Remove
+          </button>
+          <button onClick={() => setEdgeDismissed(true)}
+            className="px-2 py-1.5 text-amber-400/70 hover:text-amber-200 text-xs transition shrink-0">
+            Keep
+          </button>
+        </div>
+      )}
 
       {state.canvasData && (
         <>

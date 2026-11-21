@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ZoomIn, ZoomOut, Pipette, Maximize2 } from 'lucide-react';
 import { AppState } from '../App';
+import EdgeMarkReview from '../components/EdgeMarkReview';
+import { findEdgeMarks, removeMarks, type EdgeMark } from '../utils/edgeMarks';
 import {
   applyTrueColorToAlpha, applyColorToAlpha, applyHalftone,
   downscalePreview, detectDominantShade, detectBackgroundShade,
@@ -70,6 +72,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const [committing, setCommitting] = useState(false);
   const [autoDetected, setAutoDetected] = useState(false);
   const [dotCleanup, setDotCleanup] = useState(0);
+  // Edge marks found on the committed full-res result, held while the user
+  // decides. Null means nothing pending.
+  const [pendingEdge, setPendingEdge] = useState<
+    { image: ImageData; prealpha: ImageData; marks: EdgeMark[] } | null
+  >(null);
 
   // Dot cleanup: the slider sets the largest speck (in preview pixels) that
   // gets erased. Quadratic so the low end stays fine-grained.
@@ -340,6 +347,27 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     return img;
   };
 
+  const commitAndAdvance = (
+    finished: ImageData, prealpha: ImageData, r: number, g: number, b: number,
+  ) => {
+    updateState({
+      canvasData: finished,
+      prealphaCanvas: prealpha,
+      alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
+      alphaUserTuned: true,
+      currentStep: 4,
+    });
+    goToStep(4);
+  };
+
+  const resolveEdgeMarks = (strip: boolean) => {
+    if (!pendingEdge) return;
+    const [r, g, b] = hexToRgb(targetColor);
+    const img = strip ? removeMarks(pendingEdge.image, pendingEdge.marks) : pendingEdge.image;
+    setPendingEdge(null);
+    commitAndAdvance(img, pendingEdge.prealpha, r, g, b);
+  };
+
   const proceed = async () => {
     if (!sourceImg || committing) return;
     setCommitting(true);
@@ -355,16 +383,20 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
         colorMode === 'halftone' ? halftoneFade : softness,
         colorMode, 100 - keepSolid, lpi, screenAngle,
       );
-      updateState({
-        // Halftone output is intentionally all tiny dots — the speck
-        // cleaner would erase them, so skip it for that mode.
-        canvasData: colorMode === 'halftone' ? result : withDotCleanup(result),
-        prealphaCanvas: prealpha,
-        alphaSettings: { targetColor: [r, g, b], alphaBase: sensitivity, alphaContrast: softness },
-        alphaUserTuned: true,
-        currentStep: 4,
-      });
-      goToStep(4);
+      const finished = colorMode === 'halftone' ? result : withDotCleanup(result);
+
+      // Edge-mark check runs here, on the full-resolution committed result —
+      // the earliest point the real pixels exist, and before any time is
+      // spent on platen or export. Halftone is all tiny dots by design, so
+      // the detector would be meaningless there.
+      const scan = colorMode === 'halftone' ? { marks: [] } : findEdgeMarks(finished);
+      if (scan.marks.length > 0) {
+        setPendingEdge({ image: finished, prealpha, marks: scan.marks });
+        setCommitting(false);
+        return;
+      }
+
+      commitAndAdvance(finished, prealpha, r, g, b);
     } catch (err) {
       console.error('Alpha worker failed:', err);
 
@@ -475,7 +507,15 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const scaledH = Math.round(previewH * zoom);
 
   return (
-    <div className="h-full flex flex-col gap-2">
+    <div className="h-full flex flex-col gap-2 relative">
+      {pendingEdge && (
+        <EdgeMarkReview
+          image={pendingEdge.image}
+          marks={pendingEdge.marks}
+          onRemoveAll={() => resolveEdgeMarks(true)}
+          onKeep={() => resolveEdgeMarks(false)}
+        />
+      )}
       {/* Preview background + zoom */}
       <div className="flex items-center gap-1.5 bg-gray-800 rounded-lg px-2 py-1.5 flex-wrap shrink-0">
         {bgButtons.map(({ id, label }) => (
