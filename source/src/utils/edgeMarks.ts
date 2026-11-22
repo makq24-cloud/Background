@@ -182,6 +182,24 @@ function profileEdge(
 }
 
 /**
+ * A stray line is uniform: nearly every position along it is ink, at nearly
+ * the same thickness. Spray, splatter and dot clusters that happen to touch
+ * the edge are ragged — gaps between dots and wildly varying depth.
+ */
+function isLineLike(thick: Int32Array, isMark: Uint8Array, a: number, b: number): boolean {
+  const ts: number[] = [];
+  for (let k = a; k <= b; k++) if (isMark[k]) ts.push(thick[k]);
+  const len = b - a + 1;
+  if (ts.length < len * 0.85) return false;
+  ts.sort((x, y) => x - y);
+  const med = ts[ts.length >> 1];
+  const tol = Math.max(2, Math.round(med * 0.35));
+  let ok = 0;
+  for (const t of ts) if (Math.abs(t - med) <= tol) ok++;
+  return ok >= ts.length * 0.8;
+}
+
+/**
  * Scan all four edges of the artwork. A position is "mark-like" when it has
  * ink hugging the edge, that ink is thin, and there is clear space behind it.
  * Contiguous mark-like positions (bridging small breaks) become one mark.
@@ -225,7 +243,7 @@ export function findEdgeMarks(img: ImageData, opts: EdgeScanOptions = {}): EdgeS
         break;
       }
       const length = lastHit - p + 1;
-      if (length >= T.minRun) {
+      if (length >= T.minRun && isLineLike(thick, isMark, p, lastHit)) {
         let tMax = 0, aSum = 0, aN = 0, gMin = Infinity;
         for (let k = p; k <= lastHit; k++) {
           if (!isMark[k]) continue;
