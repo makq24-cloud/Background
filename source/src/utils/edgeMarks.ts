@@ -45,6 +45,8 @@ const MIN_GAP = 10;
  * accidental lines are often broken by anti-aliasing.
  */
 const BRIDGE = 12;
+/** How far in from the edge a line may start (px, before scaling). */
+const LEAD = 8;
 
 export type EdgeSide = 'top' | 'bottom' | 'left' | 'right';
 
@@ -67,6 +69,8 @@ export type EdgeMark = {
    * (e.g. Fit on a platen with a different aspect ratio).
    */
   inset: number;
+  /** How deep (from the scanned edge) the mark's ink reaches, incl. any lead-in. */
+  depth?: number;
 };
 
 export type EdgeScan = {
@@ -118,9 +122,10 @@ function thresholds(b: Bounds, scale = 1) {
     minRun: Math.round(MIN_RUN * k),
     minGap: Math.round(MIN_GAP * k),
     bridge: Math.round(BRIDGE * k),
-    // Resampling can leave the outermost pixel(s) nearly empty; skip up to
-    // this many before deciding the edge itself is empty.
-    lead: Math.ceil(k),
+    // A stray line doesn't always touch the edge: resampling can leave an
+    // empty outer pixel, and real lines sit a few px in or drift (slant).
+    // Skip up to this much empty space before looking for the ink.
+    lead: Math.round(LEAD * k),
   };
 }
 
@@ -137,13 +142,14 @@ function alphaAt(d: Uint8ClampedArray, w: number, x: number, y: number): number 
  */
 function profileEdge(
   data: Uint8ClampedArray, w: number, b: Bounds, side: EdgeSide, band: number, lead: number,
-): { thick: Int32Array; gap: Int32Array; alpha: Int32Array } {
+): { thick: Int32Array; gap: Int32Array; alpha: Int32Array; end: Int32Array } {
   const along = (side === 'top' || side === 'bottom') ? b.x1 - b.x0 + 1 : b.y1 - b.y0 + 1;
   const depthMax = (side === 'top' || side === 'bottom') ? b.y1 - b.y0 + 1 : b.x1 - b.x0 + 1;
   const lim = Math.min(band, depthMax);
   const thick = new Int32Array(along);
   const gap = new Int32Array(along);
   const alpha = new Int32Array(along);
+  const end = new Int32Array(along);
 
   for (let p = 0; p < along; p++) {
     let d = 0;
@@ -166,6 +172,7 @@ function profileEdge(
     }
     thick[p] = run;
     alpha[p] = run ? Math.round(sum / run) : 0;
+    end[p] = d;
 
     let g = 0;
     if (run > 0) {
@@ -178,7 +185,7 @@ function profileEdge(
     }
     gap[p] = g;
   }
-  return { thick, gap, alpha };
+  return { thick, gap, alpha, end };
 }
 
 /**
@@ -190,13 +197,23 @@ function isLineLike(thick: Int32Array, isMark: Uint8Array, a: number, b: number)
   const ts: number[] = [];
   for (let k = a; k <= b; k++) if (isMark[k]) ts.push(thick[k]);
   const len = b - a + 1;
-  if (ts.length < len * 0.85) return false;
+  // Dashed lines are fine; scattered dots fill far less of the run.
+  if (ts.length < len * 0.6) return false;
   ts.sort((x, y) => x - y);
   const med = ts[ts.length >> 1];
   const tol = Math.max(2, Math.round(med * 0.35));
   let ok = 0;
   for (const t of ts) if (Math.abs(t - med) <= tol) ok++;
-  return ok >= ts.length * 0.8;
+  if (ok >= ts.length * 0.8) return true;
+  // Tapers and spindles vary a lot end to end but change smoothly from one
+  // position to the next; splatter jumps around.
+  let smooth = 0, pairs = 0, prev = -1;
+  for (let k = a; k <= b; k++) {
+    if (!isMark[k]) { prev = -1; continue; }
+    if (prev >= 0) { pairs++; if (Math.abs(thick[k] - prev) <= 1) smooth++; }
+    prev = thick[k];
+  }
+  return pairs > 0 && smooth >= pairs * 0.9;
 }
 
 /**
@@ -212,7 +229,7 @@ export function findEdgeMarks(img: ImageData, opts: EdgeScanOptions = {}): EdgeS
   let id = 1;
 
   for (const side of ['top', 'bottom', 'left', 'right'] as EdgeSide[]) {
-    const { thick, gap, alpha } = profileEdge(data, w, b, side, T.band, T.lead);
+    const { thick, gap, alpha, end } = profileEdge(data, w, b, side, T.band, T.lead);
     const n = thick.length;
     const isMark = new Uint8Array(n);
     for (let p = 0; p < n; p++) {
@@ -244,10 +261,11 @@ export function findEdgeMarks(img: ImageData, opts: EdgeScanOptions = {}): EdgeS
       }
       const length = lastHit - p + 1;
       if (length >= T.minRun && isLineLike(thick, isMark, p, lastHit)) {
-        let tMax = 0, aSum = 0, aN = 0, gMin = Infinity;
+        let tMax = 0, aSum = 0, aN = 0, gMin = Infinity, eMax = 0;
         for (let k = p; k <= lastHit; k++) {
           if (!isMark[k]) continue;
           if (thick[k] > tMax) tMax = thick[k];
+          if (end[k] > eMax) eMax = end[k];
           aSum += alpha[k]; aN++;
           if (gap[k] < gMin) gMin = gap[k];
         }
@@ -257,6 +275,7 @@ export function findEdgeMarks(img: ImageData, opts: EdgeScanOptions = {}): EdgeS
           gap: gMin === Infinity ? 0 : gMin,
           meanAlpha: aN ? Math.round(aSum / aN) : 0,
           inset,
+          depth: eMax,
         });
       }
       p = lastHit + 1;
@@ -276,7 +295,7 @@ export function removeMarks(img: ImageData, marks: EdgeMark[]): ImageData {
     const inset = m.inset ?? 0;
     // Mark ink is at most `thickness` deep, possibly behind a thin empty
     // resample fringe; never reach past that.
-    const maxDepth = m.thickness + Math.max(2, Math.ceil(m.thickness / 3));
+    const maxDepth = (m.depth ?? m.thickness) + Math.max(2, Math.ceil(m.thickness / 3));
     for (let k = m.start; k < m.start + m.length; k++) {
       let seenInk = false;
       for (let depth = 0; depth < maxDepth; depth++) {
