@@ -3,7 +3,7 @@ import { AlertTriangle, X } from 'lucide-react';
 import type { EdgeMark } from '../utils/edgeMarks';
 import { imageDataToCanvas } from '../utils/imageUtils';
 
-type Backdrop = 'dark' | 'white' | 'checker' | 'custom';
+type Backdrop = 'auto' | 'dark' | 'white' | 'checker' | 'custom';
 
 type Props = {
   image: ImageData;
@@ -21,6 +21,31 @@ type Props = {
 const MARKER_PX = 7;
 /** Zoom factor in the per-mark detail view (1 image px -> N screen px). */
 const ZOOM = 4;
+
+/** Where a mark's pixels sit, as a rectangle in image coordinates. */
+function markRect(img: ImageData, m: EdgeMark) {
+  const ins = m.inset ?? 0;
+  const depth = Math.max(1, m.depth ?? m.thickness);
+  if (m.side === 'top')    return { x: m.start, y: ins, w: m.length, h: depth };
+  if (m.side === 'bottom') return { x: m.start, y: img.height - ins - depth, w: m.length, h: depth };
+  if (m.side === 'left')   return { x: ins, y: m.start, w: depth, h: m.length };
+  return { x: img.width - ins - depth, y: m.start, w: depth, h: m.length };
+}
+
+/** Mean colour of the visible pixels in a rectangle, or null if none. */
+function meanColor(img: ImageData, r: { x: number; y: number; w: number; h: number }) {
+  let rs = 0, gs = 0, bs = 0, n = 0;
+  const x1 = Math.min(img.width, r.x + r.w), y1 = Math.min(img.height, r.y + r.h);
+  const step = Math.max(1, Math.floor((r.w * r.h) / 4000));
+  let k = 0;
+  for (let y = Math.max(0, r.y); y < y1; y++) for (let x = Math.max(0, r.x); x < x1; x++) {
+    if (k++ % step) continue;
+    const i = (y * img.width + x) * 4;
+    if (img.data[i + 3] <= 8) continue;
+    rs += img.data[i]; gs += img.data[i + 1]; bs += img.data[i + 2]; n++;
+  }
+  return n ? { r: rs / n, g: gs / n, b: bs / n } : null;
+}
 
 function paintBackdrop(
   ctx: CanvasRenderingContext2D, w: number, h: number, mode: Backdrop, custom: string,
@@ -43,9 +68,10 @@ export default function EdgeMarkReview({ image, marks, onRemoveAll, onKeep }: Pr
   const overviewRef = useRef<HTMLCanvasElement>(null);
   const detailRef = useRef<HTMLCanvasElement>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  // Dark by default: these marks are usually light or mid-grey, and white
-  // hides them completely — which is why they get missed in the first place.
-  const [backdrop, setBackdrop] = useState<Backdrop>('dark');
+  // Auto: each mark is shown on whichever backdrop contrasts with ITS colour
+  // — dark lines on white, light lines on dark — so a black-on-black or
+  // white-on-white line can't hide. The buttons still override it.
+  const [backdrop, setBackdrop] = useState<Backdrop>('auto');
   const [customColor, setCustomColor] = useState('#888888');
 
   const srcCanvas = useMemo(() => imageDataToCanvas(image), [image]);
@@ -61,7 +87,7 @@ export default function EdgeMarkReview({ image, marks, onRemoveAll, onKeep }: Pr
     const h = Math.max(1, Math.round(image.height * scale));
     cv.width = w; cv.height = h;
     const ctx = cv.getContext('2d')!;
-    paintBackdrop(ctx, w, h, backdrop, customColor);
+    paintBackdrop(ctx, w, h, backdrop === 'auto' ? 'checker' : backdrop, customColor);
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(srcCanvas, 0, 0, w, h);
 
@@ -98,12 +124,33 @@ export default function EdgeMarkReview({ image, marks, onRemoveAll, onKeep }: Pr
 
     cv.width = cw * ZOOM; cv.height = chh * ZOOM;
     const ctx = cv.getContext('2d')!;
-    paintBackdrop(ctx, cv.width, cv.height, backdrop, customColor);
+    const mr = markRect(image, mark);
+    const lineColor = meanColor(image, mr);
+    let bd: Backdrop = backdrop;
+    if (bd === 'auto') {
+      const lum = lineColor ? 0.299 * lineColor.r + 0.587 * lineColor.g + 0.114 * lineColor.b : 255;
+      bd = lum < 128 ? 'white' : 'dark';
+    }
+    paintBackdrop(ctx, cv.width, cv.height, bd, customColor);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(srcCanvas, sx, sy, cw, chh, 0, 0, cw * ZOOM, chh * ZOOM);
+
+    // Outline AROUND the line (never over it), so its real pixels stay
+    // visible. Orange, or cyan when the art next to it is orange/red.
+    const near = meanColor(image, { x: sx, y: sy, w: cw, h: chh });
+    const warm = near && near.r > near.g + 40 && near.r > near.b + 20;
+    const ox = (mr.x - sx) * ZOOM, oy = (mr.y - sy) * ZOOM;
+    const ow = mr.w * ZOOM, oh = mr.h * ZOOM;
+    const op = 5;
+    ctx.strokeStyle = warm ? '#22d3ee' : '#ff8a3d';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([10, 6]);
+    ctx.strokeRect(ox - op, oy - op, ow + op * 2, oh + op * 2);
+    ctx.setLineDash([]);
   }, [srcCanvas, image, mark, backdrop, customColor]);
 
   const backdrops: { id: Backdrop; label: string }[] = [
+    { id: 'auto', label: 'Auto' },
     { id: 'dark', label: 'Dark' },
     { id: 'white', label: 'White' },
     { id: 'checker', label: 'Checker' },
