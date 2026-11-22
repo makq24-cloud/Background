@@ -3,10 +3,10 @@ import { AppState } from '../App';
 import { lanczosResize, imageDataToCanvas } from '../utils/imageUtils';
 
 const TEMPLATES = [
-  { name: 'Neato Regular', short: 'Neato Reg',   label: '12"×16"', width: 3600, height: 4800 },
-  { name: 'Neato Jumbo',   short: 'Neato Jumbo', label: '15"×18"', width: 4500, height: 5400 },
-  { name: 'P-Partner Regular',   short: 'P-Partner',     label: '16"×21"', width: 4800, height: 6300 },
-  { name: 'P-Partner MAX',       short: 'P-Partner MAX', label: '20"×20"', width: 6000, height: 6000 },
+  { name: 'Neato Regular',      short: 'Neato Reg',      label: '12"×16"', width: 3600, height: 4800 },
+  { name: 'Neato Jumbo',        short: 'Neato Jumbo',    label: '15"×18"', width: 4500, height: 5400 },
+  { name: 'P-Partner Regular',  short: 'P-Partner',      label: '16"×21"', width: 4800, height: 6300 },
+  { name: 'P-Partner MAX',      short: 'P-Partner MAX',  label: '20"×20"', width: 6000, height: 6000 },
 ];
 const DEFAULT_TEMPLATE = 1; // Neato Jumbo
 // Largest real dimension across all platens — used to size the proportional
@@ -119,7 +119,9 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
   useEffect(() => {
     if (didInit.current || !src) return;
     didInit.current = true;
-    const carried = TEMPLATES.find(t => t.name === state.platenName);
+    const carried = TEMPLATES.find(t => t.name === state.platenName)
+      // Sessions saved before a rename: match the platen by its size.
+      ?? TEMPLATES.find(t => t.width === state.platenDimensions?.width && t.height === state.platenDimensions?.height);
     const t = carried ?? TEMPLATES[DEFAULT_TEMPLATE];
     const d = { width: t.width, height: t.height };
     setPlaten(d);
