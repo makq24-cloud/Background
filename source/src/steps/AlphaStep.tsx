@@ -564,21 +564,11 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
             onKeep={() => resolveEdgeMarks(false)}
           />
         )}
-        <div className="bg-gray-800 rounded-lg p-4 space-y-3">
+        <div className="bg-gray-800 rounded-lg p-4">
           <h2 className="text-xl font-bold">Already transparent</h2>
-          <p className="text-gray-300 text-sm">
-            This design already has a transparent background, so background removal is skipped —
-            running it again would fade the design a second time.
+          <p className="text-gray-400 text-sm mt-1">
+            Skipping background removal. We'll clean{ghostPct > 0 ? ` ${ghostPct}% invisible pixels` : ' it up'} and check the edges.
           </p>
-          <ul className="text-gray-400 text-sm list-disc pl-5 space-y-1">
-            <li>
-              Invisible pixels (under 3% opacity) get cleared — they can print as a faint haze or box.
-              {ghostPct > 0 && <span className="text-amber-300"> About {ghostPct}% of this image.</span>}
-            </li>
-            <li>Thin stray lines along the edges are checked — you review them before anything is removed.</li>
-            <li>On the next screen, faint background cut off at an edge is checked too.</li>
-          </ul>
-          <p className="text-gray-500 text-xs">Nothing else in the design is changed.</p>
         </div>
         <button onClick={commitInspectOnly} disabled={!sourceImg || committing}
           className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg font-semibold transition">
