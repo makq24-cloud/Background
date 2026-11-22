@@ -47,6 +47,11 @@ const MIN_GAP = 10;
 const BRIDGE = 12;
 /** How far in from the edge a line may start (px, before scaling). */
 const LEAD = 8;
+/**
+ * Marks fainter than this on average are left to the cut-off haze check —
+ * a faint wash along the edge is haze, not a stray line.
+ */
+const MIN_MARK_ALPHA = 40;
 
 export type EdgeSide = 'top' | 'bottom' | 'left' | 'right';
 
@@ -216,6 +221,12 @@ function isLineLike(thick: Int32Array, isMark: Uint8Array, a: number, b: number)
   return pairs > 0 && smooth >= pairs * 0.9;
 }
 
+function meanAlphaOf(alpha: Int32Array, isMark: Uint8Array, a: number, z: number): number {
+  let s = 0, n = 0;
+  for (let k = a; k <= z; k++) if (isMark[k]) { s += alpha[k]; n++; }
+  return n ? s / n : 0;
+}
+
 /**
  * Scan all four edges of the artwork. A position is "mark-like" when it has
  * ink hugging the edge, that ink is thin, and there is clear space behind it.
@@ -246,6 +257,54 @@ export function findEdgeMarks(img: ImageData, opts: EdgeScanOptions = {}): EdgeS
     const inset = side === 'top' ? b.y0 : side === 'bottom' ? h - 1 - b.y1
       : side === 'left' ? b.x0 : w - 1 - b.x1;
 
+    const A = (x: number, y: number) => data[(y * w + x) * 4 + 3];
+    /** Any ink within the scan band at this position along the edge? */
+    const inkAt = (s: EdgeSide, pos: number, from: number, to: number) => {
+      const len = (s === 'top' || s === 'bottom') ? b.x1 - b.x0 + 1 : b.y1 - b.y0 + 1;
+      if (pos < 0 || pos >= len) return false;
+      for (let dd = from; dd < to; dd++) {
+        const [x, y] = at(b, s, pos, dd);
+        if (x < b.x0 || x > b.x1 || y < b.y0 || y > b.y1) break;
+        if (A(x, y) > EMPTY_ALPHA) return true;
+      }
+      return false;
+    };
+    // The two sides that meet this side at its start (pos 0) and end corners.
+    const adj: Record<EdgeSide, [EdgeSide, EdgeSide]> = {
+      top: ['left', 'right'], bottom: ['left', 'right'],
+      left: ['top', 'bottom'], right: ['top', 'bottom'],
+    };
+    const otherLen = (s: EdgeSide) => (s === 'top' || s === 'bottom') ? b.x1 - b.x0 + 1 : b.y1 - b.y0 + 1;
+    /**
+     * Does the ink run on into something past this end of the run? A stray
+     * line ends in empty space (or at a bare corner). A frame, badge ring,
+     * rounded border or underline keeps going — around a corner, curving
+     * inward, or into the artwork it belongs to.
+     */
+    const endBlocked = (endPos: number, dir: -1 | 1, reach: number) => {
+      const atCorner = dir < 0 ? endPos <= T.bridge : endPos >= n - 1 - T.bridge;
+      if (atCorner) {
+        // Frame check: does edge-hugging ink continue along the adjacent side?
+        const s2 = adj[side][dir < 0 ? 0 : 1];
+        const near = (side === 'top' || side === 'left') ? 0 : otherLen(s2) - 1;
+        const step = near === 0 ? 1 : -1;
+        let hits = 0;
+        const look = T.minRun;
+        for (let k = 0; k < look; k++) if (inkAt(s2, near + step * k, 0, T.lead + T.maxThick)) hits++;
+        return hits >= look * 0.6;
+      }
+      for (let k = 1; k <= 3; k++) if (inkAt(side, endPos + dir * k, 0, reach)) return true;
+      return false;
+    };
+    const isPartOfShape = (a: number, z: number) => {
+      // Only ink at the line's own depth counts as "continuing" — artwork
+      // sitting behind the gap is not part of the line.
+      let reach = 0;
+      for (let k = a; k <= z; k++) if (isMark[k] && end[k] > reach) reach = end[k];
+      reach = Math.min(T.band, reach + Math.max(3, Math.floor(T.minGap / 2)));
+      return endBlocked(a, -1, reach) && endBlocked(z, 1, reach);
+    };
+
     let p = 0;
     while (p < n) {
       if (!isMark[p]) { p++; continue; }
@@ -260,7 +319,8 @@ export function findEdgeMarks(img: ImageData, opts: EdgeScanOptions = {}): EdgeS
         break;
       }
       const length = lastHit - p + 1;
-      if (length >= T.minRun && isLineLike(thick, isMark, p, lastHit)) {
+      if (length >= T.minRun && isLineLike(thick, isMark, p, lastHit) &&
+          !isPartOfShape(p, lastHit) && meanAlphaOf(alpha, isMark, p, lastHit) >= MIN_MARK_ALPHA) {
         let tMax = 0, aSum = 0, aN = 0, gMin = Infinity, eMax = 0;
         for (let k = p; k <= lastHit; k++) {
           if (!isMark[k]) continue;
@@ -297,6 +357,17 @@ export function removeMarks(img: ImageData, marks: EdgeMark[]): ImageData {
     // resample fringe; never reach past that.
     const maxDepth = (m.depth ?? m.thickness) + Math.max(2, Math.ceil(m.thickness / 3));
     for (let k = m.start; k < m.start + m.length; k++) {
+      // Where artwork crosses the line (a stem, a letter), ink continues past
+      // the line's depth — leave that position alone rather than notch it.
+      {
+        let x: number, y: number;
+        const dd = maxDepth;
+        if (m.side === 'top')         { x = k; y = inset + dd; }
+        else if (m.side === 'bottom') { x = k; y = h - 1 - inset - dd; }
+        else if (m.side === 'left')   { x = inset + dd; y = k; }
+        else                          { x = w - 1 - inset - dd; y = k; }
+        if (x >= 0 && y >= 0 && x < w && y < h && d[(y * w + x) * 4 + 3] > EMPTY_ALPHA) continue;
+      }
       let seenInk = false;
       for (let depth = 0; depth < maxDepth; depth++) {
         let x: number, y: number;
