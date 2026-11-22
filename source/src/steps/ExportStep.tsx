@@ -6,6 +6,7 @@ import { imageDataToCanvas, get2dContext } from '../utils/imageUtils';
 import { encodeDitheredPNG } from '../utils/ditherQuantize';
 import { findEdgeMarks, removeMarks, type EdgeMark } from '../utils/edgeMarks';
 import { edgeScanOpts } from '../utils/edgeScanOpts';
+import { findHazeEdges, fadeHazeEdges, type HazeEdge } from '../utils/hazeEdges';
 
 const formatBytes = (n: number) =>
   n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -24,6 +25,10 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
   // the final file. Re-check silently and surface a banner if any survived.
   const [edgeMarks, setEdgeMarks] = useState<EdgeMark[]>([]);
   const [edgeDismissed, setEdgeDismissed] = useState(false);
+  // Faint haze that runs into the art's edge stops in a straight line, which
+  // prints as a visible line on fabric. Offer to fade it out.
+  const [hazeEdges, setHazeEdges] = useState<HazeEdge[]>([]);
+  const [hazeDismissed, setHazeDismissed] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   // 'lossless' = exact pixels (default — never posterizes). 'compressed' =
@@ -338,6 +343,21 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
     }
   }, [state.canvasData]);
 
+  useEffect(() => {
+    if (!state.canvasData) { setHazeEdges([]); return; }
+    try {
+      setHazeEdges(findHazeEdges(state.canvasData, edgeScanOpts(state)));
+    } catch {
+      setHazeEdges([]);
+    }
+  }, [state.canvasData]);
+
+  const fadeHaze = () => {
+    if (!state.canvasData || hazeEdges.length === 0) return;
+    updateState({ canvasData: fadeHazeEdges(state.canvasData, hazeEdges, edgeScanOpts(state)) });
+    setHazeEdges([]);
+  };
+
   const stripEdgeMarks = () => {
     if (!state.canvasData || edgeMarks.length === 0) return;
     updateState({ canvasData: removeMarks(state.canvasData, edgeMarks) });
@@ -367,6 +387,28 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
             Remove
           </button>
           <button onClick={() => setEdgeDismissed(true)}
+            className="px-2 py-1.5 text-amber-400/70 hover:text-amber-200 text-xs transition shrink-0">
+            Keep
+          </button>
+        </div>
+      )}
+
+      {hazeEdges.length > 0 && !hazeDismissed && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-950 border border-amber-900/70 rounded-lg">
+          <AlertTriangle size={17} className="text-amber-300 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-amber-200 text-sm font-semibold">
+              Faint background cut off at the {hazeEdges.map(e => e.side).join(', ')} edge
+            </p>
+            <p className="text-amber-400/80 text-xs mt-0.5">
+              Soft haze that stops in a straight line prints as a visible line on the shirt. Fading softens it; solid artwork isn't touched.
+            </p>
+          </div>
+          <button onClick={fadeHaze}
+            className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-amber-950 rounded text-xs font-semibold transition shrink-0">
+            Fade edges
+          </button>
+          <button onClick={() => setHazeDismissed(true)}
             className="px-2 py-1.5 text-amber-400/70 hover:text-amber-200 text-xs transition shrink-0">
             Keep
           </button>
