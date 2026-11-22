@@ -380,7 +380,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       else if (a < 250) { partial++; if (a <= 8) ghost++; }
     }
     return {
-      already: clear / n >= 0.02 && (clear + partial) / n >= 0.05,
+      // Any real transparency counts: a JPEG or flattened PNG has none at all,
+      // while an export with only a rough transparent border has ~2%.
+      already: clear / n >= 0.002 && (clear + partial) / n >= 0.005,
       ghostFrac: ghost / n,
     };
   }, [state.croppedImage, state.sourceImage]);
