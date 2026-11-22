@@ -361,6 +361,49 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
     goToStep(4);
   };
 
+  // ── Already-transparent uploads ──────────────────────────────────────────
+  // A PNG that already has a transparent background (e.g. an earlier export)
+  // must NOT go through background removal again — that fades it a second
+  // time. Instead: clear the invisible 1-7 alpha pixels, run the edge-line
+  // check, and go to Export (which also runs the cut-off haze check).
+  const transparency = useMemo(() => {
+    const img = state.croppedImage ?? state.sourceImage;
+    if (!img) return null;
+    const d = img.data;
+    const total = img.width * img.height;
+    const step = Math.max(1, Math.floor(total / 250000));
+    let n = 0, clear = 0, partial = 0, ghost = 0;
+    for (let k = 0; k < total; k += step) {
+      const a = d[k * 4 + 3];
+      n++;
+      if (a === 0) clear++;
+      else if (a < 250) { partial++; if (a <= 8) ghost++; }
+    }
+    return {
+      already: clear / n >= 0.02 && (clear + partial) / n >= 0.05,
+      ghostFrac: ghost / n,
+    };
+  }, [state.croppedImage, state.sourceImage]);
+  const [forceRemoval, setForceRemoval] = useState(false);
+  const inspectOnly = transparency?.already && !forceRemoval;
+
+  const commitInspectOnly = () => {
+    if (!sourceImg || committing) return;
+    const finished = cloneImageData(sourceImg);
+    const d = finished.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] <= 8) { d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 0; }
+    }
+    const [r, g, b] = hexToRgb(targetColor);
+    let marks: EdgeMark[] = [];
+    try { marks = findEdgeMarks(finished, edgeScanOpts(state)).marks; } catch { marks = []; }
+    if (marks.length > 0) {
+      setPendingEdge({ image: finished, prealpha: sourceImg, marks });
+      return;
+    }
+    commitAndAdvance(finished, sourceImg, r, g, b);
+  };
+
   const resolveEdgeMarks = (strip: boolean) => {
     if (!pendingEdge) return;
     const [r, g, b] = hexToRgb(targetColor);
@@ -506,6 +549,46 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
   const previewH = activePreview?.height ?? 0;
   const scaledW = Math.round(previewW * zoom);
   const scaledH = Math.round(previewH * zoom);
+
+  if (inspectOnly) {
+    const ghostPct = transparency ? Math.round(transparency.ghostFrac * 1000) / 10 : 0;
+    return (
+      <div className="h-full flex flex-col gap-3 relative">
+        {pendingEdge && (
+          <EdgeMarkReview
+            image={pendingEdge.image}
+            marks={pendingEdge.marks}
+            onRemoveAll={() => resolveEdgeMarks(true)}
+            onKeep={() => resolveEdgeMarks(false)}
+          />
+        )}
+        <div className="bg-gray-800 rounded-lg p-4 space-y-3">
+          <h2 className="text-xl font-bold">Already transparent</h2>
+          <p className="text-gray-300 text-sm">
+            This design already has a transparent background, so background removal is skipped —
+            running it again would fade the design a second time.
+          </p>
+          <ul className="text-gray-400 text-sm list-disc pl-5 space-y-1">
+            <li>
+              Invisible pixels (under 3% opacity) get cleared — they can print as a faint haze or box.
+              {ghostPct > 0 && <span className="text-amber-300"> About {ghostPct}% of this image.</span>}
+            </li>
+            <li>Thin stray lines along the edges are checked — you review them before anything is removed.</li>
+            <li>On the next screen, faint background cut off at an edge is checked too.</li>
+          </ul>
+          <p className="text-gray-500 text-xs">Nothing else in the design is changed.</p>
+        </div>
+        <button onClick={commitInspectOnly} disabled={!sourceImg || committing}
+          className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg font-semibold transition">
+          Check &amp; continue
+        </button>
+        <button onClick={() => setForceRemoval(true)}
+          className="w-full py-2 text-gray-400 hover:text-gray-200 text-sm transition">
+          Remove background anyway
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col gap-2 relative">
