@@ -364,6 +364,7 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
       updateState({
         platenDimensions: platen,
         platenName: selectedTemplate,
+        artPlacement: { x: ox, y: oy, w: tw, h: th, scale: tw / srcW },
         canvasData: ctx.getImageData(0, 0, out.width, out.height),
         // Drop any prealpha buffer from a previous run — this new composite
         // must be what the Background step reprocesses, not the old layout.

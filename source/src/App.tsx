@@ -13,6 +13,8 @@ export type AppState = {
   croppedImage: ImageData | null;
   platenDimensions: { width: number; height: number } | null;
   platenName: string;
+  /** Where the art landed on the platen canvas, and its resize factor. */
+  artPlacement: { x: number; y: number; w: number; h: number; scale: number } | null;
   canvasData: ImageData | null;
   prealphaCanvas: ImageData | null;
   alphaSettings: {
@@ -41,6 +43,7 @@ const INITIAL_STATE: AppState = {
   croppedImage: null,
   platenDimensions: null,
   platenName: '',
+  artPlacement: null,
   canvasData: null,
   prealphaCanvas: null,
   alphaSettings: {

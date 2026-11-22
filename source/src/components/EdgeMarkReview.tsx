@@ -69,10 +69,11 @@ export default function EdgeMarkReview({ image, marks, onRemoveAll, onKeep }: Pr
     for (const m of marks) {
       const a0 = m.start * scale;
       const len = Math.max(3, m.length * scale);
-      if (m.side === 'top')         ctx.fillRect(a0, 0, len, MARKER_PX);
-      else if (m.side === 'bottom') ctx.fillRect(a0, h - MARKER_PX, len, MARKER_PX);
-      else if (m.side === 'left')   ctx.fillRect(0, a0, MARKER_PX, len);
-      else                          ctx.fillRect(w - MARKER_PX, a0, MARKER_PX, len);
+      const ins = (m.inset ?? 0) * scale;
+      if (m.side === 'top')         ctx.fillRect(a0, ins, len, MARKER_PX);
+      else if (m.side === 'bottom') ctx.fillRect(a0, h - ins - MARKER_PX, len, MARKER_PX);
+      else if (m.side === 'left')   ctx.fillRect(ins, a0, MARKER_PX, len);
+      else                          ctx.fillRect(w - ins - MARKER_PX, a0, MARKER_PX, len);
     }
   }, [srcCanvas, image, marks, backdrop, customColor, mark]);
 
@@ -89,10 +90,11 @@ export default function EdgeMarkReview({ image, marks, onRemoveAll, onKeep }: Pr
     const cw = horizontal ? along : thick;
     const chh = horizontal ? thick : along;
     let sx = 0, sy = 0;
-    if (mark.side === 'top')         { sx = alongStart; sy = 0; }
-    else if (mark.side === 'bottom') { sx = alongStart; sy = image.height - thick; }
-    else if (mark.side === 'left')   { sx = 0; sy = alongStart; }
-    else                             { sx = image.width - thick; sy = alongStart; }
+    const ins = mark.inset ?? 0;
+    if (mark.side === 'top')         { sx = alongStart; sy = ins; }
+    else if (mark.side === 'bottom') { sx = alongStart; sy = image.height - ins - thick; }
+    else if (mark.side === 'left')   { sx = ins; sy = alongStart; }
+    else                             { sx = image.width - ins - thick; sy = alongStart; }
 
     cv.width = cw * ZOOM; cv.height = chh * ZOOM;
     const ctx = cv.getContext('2d')!;

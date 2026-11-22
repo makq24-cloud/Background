@@ -5,6 +5,7 @@ import { AppState } from '../App';
 import { imageDataToCanvas, get2dContext } from '../utils/imageUtils';
 import { encodeDitheredPNG } from '../utils/ditherQuantize';
 import { findEdgeMarks, removeMarks, type EdgeMark } from '../utils/edgeMarks';
+import { edgeScanOpts } from '../utils/edgeScanOpts';
 
 const formatBytes = (n: number) =>
   n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -331,7 +332,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
   useEffect(() => {
     if (!state.canvasData) { setEdgeMarks([]); return; }
     try {
-      setEdgeMarks(findEdgeMarks(state.canvasData).marks);
+      setEdgeMarks(findEdgeMarks(state.canvasData, edgeScanOpts(state)).marks);
     } catch {
       setEdgeMarks([]);
     }

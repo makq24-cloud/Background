@@ -3,6 +3,7 @@ import { ZoomIn, ZoomOut, Pipette, Maximize2 } from 'lucide-react';
 import { AppState } from '../App';
 import EdgeMarkReview from '../components/EdgeMarkReview';
 import { findEdgeMarks, removeMarks, type EdgeMark } from '../utils/edgeMarks';
+import { edgeScanOpts } from '../utils/edgeScanOpts';
 import {
   applyTrueColorToAlpha, applyColorToAlpha, applyHalftone,
   downscalePreview, detectDominantShade, detectBackgroundShade,
@@ -389,7 +390,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
       // the earliest point the real pixels exist, and before any time is
       // spent on platen or export. Halftone is all tiny dots by design, so
       // the detector would be meaningless there.
-      const scan = colorMode === 'halftone' ? { marks: [] } : findEdgeMarks(finished);
+      const scan = colorMode === 'halftone' ? { marks: [] } : findEdgeMarks(finished, edgeScanOpts(state));
       if (scan.marks.length > 0) {
         setPendingEdge({ image: finished, prealpha, marks: scan.marks });
         setCommitting(false);
